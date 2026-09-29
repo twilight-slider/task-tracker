@@ -128,26 +128,28 @@ function Set-DirectoryRights([string]$path, $owner, [bool]$agentRead) {
     if (-not (Test-Path -LiteralPath $path)) { New-Item -ItemType Directory -Path $path | Out-Null }
     $item = Get-Item -LiteralPath $path -Force
     if (-not $item.PSIsContainer -or ($item.Attributes -band [IO.FileAttributes]::ReparsePoint)) { throw "Not a plain directory: $path" }
-    $acl = [Security.AccessControl.DirectorySecurity]::new()
+    $acl = Get-Acl -LiteralPath $path
     $acl.SetAccessRuleProtection($true, $false)
+    foreach ($rule in @($acl.Access)) { $acl.RemoveAccessRuleSpecific($rule) }
     $acl.SetOwner($owner)
     foreach ($entry in @(@($system, 'FullControl'), @($admins, 'FullControl'), @($serviceSid, 'FullControl'))) {
         $acl.AddAccessRule([Security.AccessControl.FileSystemAccessRule]::new($entry[0], $entry[1], 'ContainerInherit, ObjectInherit', 'None', 'Allow'))
     }
     if ($agentRead) { $acl.AddAccessRule([Security.AccessControl.FileSystemAccessRule]::new($agentSid, 'ReadAndExecute', 'ContainerInherit, ObjectInherit', 'None', 'Allow')) }
-    Set-Acl -LiteralPath $path -AclObject $acl
+    [IO.FileSystemAclExtensions]::SetAccessControl([IO.DirectoryInfo]::new($path), $acl)
 }
 function Set-FileRights([string]$path, [bool]$agentRead) {
     $item = Get-Item -LiteralPath $path -Force
     if ($item.PSIsContainer -or ($item.Attributes -band [IO.FileAttributes]::ReparsePoint)) { throw "Not a plain file: $path" }
-    $acl = [Security.AccessControl.FileSecurity]::new()
+    $acl = Get-Acl -LiteralPath $path
     $acl.SetAccessRuleProtection($true, $false)
+    foreach ($rule in @($acl.Access)) { $acl.RemoveAccessRuleSpecific($rule) }
     $acl.SetOwner($serviceSid)
     foreach ($entry in @(@($system, 'FullControl'), @($admins, 'FullControl'), @($serviceSid, 'FullControl'))) {
         $acl.AddAccessRule([Security.AccessControl.FileSystemAccessRule]::new($entry[0], $entry[1], 'Allow'))
     }
     if ($agentRead) { $acl.AddAccessRule([Security.AccessControl.FileSystemAccessRule]::new($agentSid, 'ReadAndExecute', 'Allow')) }
-    Set-Acl -LiteralPath $path -AclObject $acl
+    [IO.FileSystemAclExtensions]::SetAccessControl([IO.FileInfo]::new($path), $acl)
 }
 
 $parent = [IO.Path]::GetDirectoryName($root)
