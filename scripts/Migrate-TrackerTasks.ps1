@@ -100,7 +100,7 @@ function Set-ParentAcl([string]$path) {
     $acl = Get-Acl -LiteralPath $path
     $acl.SetAccessRuleProtection($true, $false)
     foreach ($rule in @($acl.Access)) { $acl.RemoveAccessRuleSpecific($rule) }
-    $acl.SetOwner($service)
+    if ($acl.GetOwner([Security.Principal.SecurityIdentifier]).Value -ne $service.Value) { $acl.SetOwner($service) }
     foreach ($sid in @($system, $admins, $service)) {
         $acl.AddAccessRule([Security.AccessControl.FileSystemAccessRule]::new(
             $sid, 'FullControl', 'ContainerInherit, ObjectInherit', 'None', 'Allow'))
@@ -131,7 +131,9 @@ try {
         $acl = Get-Acl -LiteralPath $item.FullName
         $acl.SetAccessRuleProtection($true, $false)
         foreach ($rule in @($acl.Access)) { $acl.RemoveAccessRuleSpecific($rule) }
-        if ($protectedFile) { $acl.SetOwner($service) }
+        if ($protectedFile -and $acl.GetOwner([Security.Principal.SecurityIdentifier]).Value -ne $service.Value) {
+            $acl.SetOwner($service)
+        }
         foreach ($sid in @($system, $admins, $service)) {
             $acl.AddAccessRule([Security.AccessControl.FileSystemAccessRule]::new($sid, 'FullControl', 'Allow'))
         }

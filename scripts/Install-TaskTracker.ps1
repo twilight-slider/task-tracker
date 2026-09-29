@@ -131,12 +131,13 @@ function Set-DirectoryRights([string]$path, $owner, [bool]$agentRead) {
     $acl = Get-Acl -LiteralPath $path
     $acl.SetAccessRuleProtection($true, $false)
     foreach ($rule in @($acl.Access)) { $acl.RemoveAccessRuleSpecific($rule) }
-    $acl.SetOwner($owner)
+    if ($acl.GetOwner([Security.Principal.SecurityIdentifier]).Value -ne $owner.Value) { $acl.SetOwner($owner) }
     foreach ($entry in @(@($system, 'FullControl'), @($admins, 'FullControl'), @($serviceSid, 'FullControl'))) {
         $acl.AddAccessRule([Security.AccessControl.FileSystemAccessRule]::new($entry[0], $entry[1], 'ContainerInherit, ObjectInherit', 'None', 'Allow'))
     }
     if ($agentRead) { $acl.AddAccessRule([Security.AccessControl.FileSystemAccessRule]::new($agentSid, 'ReadAndExecute', 'ContainerInherit, ObjectInherit', 'None', 'Allow')) }
-    [IO.FileSystemAclExtensions]::SetAccessControl([IO.DirectoryInfo]::new($path), $acl)
+    try { [IO.FileSystemAclExtensions]::SetAccessControl([IO.DirectoryInfo]::new($path), $acl) }
+    catch { throw "Directory ACL write failed for ${path}: $($_.Exception.Message)" }
 }
 function Set-FileRights([string]$path, [bool]$agentRead) {
     $item = Get-Item -LiteralPath $path -Force
@@ -144,12 +145,13 @@ function Set-FileRights([string]$path, [bool]$agentRead) {
     $acl = Get-Acl -LiteralPath $path
     $acl.SetAccessRuleProtection($true, $false)
     foreach ($rule in @($acl.Access)) { $acl.RemoveAccessRuleSpecific($rule) }
-    $acl.SetOwner($serviceSid)
+    if ($acl.GetOwner([Security.Principal.SecurityIdentifier]).Value -ne $serviceSid.Value) { $acl.SetOwner($serviceSid) }
     foreach ($entry in @(@($system, 'FullControl'), @($admins, 'FullControl'), @($serviceSid, 'FullControl'))) {
         $acl.AddAccessRule([Security.AccessControl.FileSystemAccessRule]::new($entry[0], $entry[1], 'Allow'))
     }
     if ($agentRead) { $acl.AddAccessRule([Security.AccessControl.FileSystemAccessRule]::new($agentSid, 'ReadAndExecute', 'Allow')) }
-    [IO.FileSystemAclExtensions]::SetAccessControl([IO.FileInfo]::new($path), $acl)
+    try { [IO.FileSystemAclExtensions]::SetAccessControl([IO.FileInfo]::new($path), $acl) }
+    catch { throw "File ACL write failed for ${path}: $($_.Exception.Message)" }
 }
 
 $parent = [IO.Path]::GetDirectoryName($root)

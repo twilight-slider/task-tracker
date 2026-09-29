@@ -150,7 +150,9 @@ foreach ($entry in @(@($newAgents, $true), @($backupAgents, $true), @($newRegist
     $acl = Get-Acl -LiteralPath $entry[0]
     $acl.SetAccessRuleProtection($true, $false)
     foreach ($rule in @($acl.Access)) { $acl.RemoveAccessRuleSpecific($rule) }
-    $acl.SetOwner($serviceSid)
+    if ($acl.GetOwner([Security.Principal.SecurityIdentifier]).Value -ne $serviceSid.Value) {
+        $acl.SetOwner($serviceSid)
+    }
     foreach ($sid in @($system, $admins, $serviceSid)) {
         $acl.AddAccessRule([Security.AccessControl.FileSystemAccessRule]::new($sid, 'FullControl', 'Allow'))
     }

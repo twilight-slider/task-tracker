@@ -35,7 +35,9 @@ function Set-TaskAcl([string]$path, [bool]$ordinary, [bool]$taskContent) {
     $acl = $current
     $acl.SetAccessRuleProtection($true, $false)
     foreach ($rule in @($acl.Access)) { $acl.RemoveAccessRuleSpecific($rule) }
-    if ($Migration) { $acl.SetOwner($service) }
+    if ($Migration -and $current.GetOwner([Security.Principal.SecurityIdentifier]).Value -ne $service.Value) {
+        $acl.SetOwner($service)
+    }
     foreach ($sid in @($system, $admins, $service)) {
         $acl.AddAccessRule([Security.AccessControl.FileSystemAccessRule]::new(
             $sid, 'FullControl', 'ContainerInherit, ObjectInherit', 'None', 'Allow'))
