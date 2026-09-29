@@ -150,14 +150,20 @@ foreach ($entry in @(@($newAgents, $true), @($backupAgents, $true), @($newRegist
     $acl = Get-Acl -LiteralPath $entry[0]
     $acl.SetAccessRuleProtection($true, $false)
     foreach ($rule in @($acl.Access)) { $acl.RemoveAccessRuleSpecific($rule) }
-    if ($acl.GetOwner([Security.Principal.SecurityIdentifier]).Value -ne $serviceSid.Value) {
+    $ownerChanged = $acl.GetOwner([Security.Principal.SecurityIdentifier]).Value -ne $serviceSid.Value
+    if ($ownerChanged) {
         $acl.SetOwner($serviceSid)
     }
     foreach ($sid in @($system, $admins, $serviceSid)) {
         $acl.AddAccessRule([Security.AccessControl.FileSystemAccessRule]::new($sid, 'FullControl', 'Allow'))
     }
     if ($entry[1]) { $acl.AddAccessRule([Security.AccessControl.FileSystemAccessRule]::new($agentSid, 'ReadAndExecute', 'Allow')) }
-    [IO.FileSystemAclExtensions]::SetAccessControl([IO.FileInfo]::new($entry[0]), $acl)
+    if ($ownerChanged) {
+        $fresh = [Security.AccessControl.FileSecurity]::new()
+        $sections = [Security.AccessControl.AccessControlSections]'Owner,Access'
+        $fresh.SetSecurityDescriptorSddlForm($acl.GetSecurityDescriptorSddlForm($sections), $sections)
+        Set-Acl -LiteralPath $entry[0] -AclObject $fresh
+    } else { [IO.FileSystemAclExtensions]::SetAccessControl([IO.FileInfo]::new($entry[0]), $acl) }
 }
 try {
     [IO.File]::WriteAllText($marker, ((@{ migratedAt = (Get-Date).ToString('o'); legacyRegistry = $sourceRegistry;

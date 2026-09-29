@@ -124,6 +124,21 @@ $admins = [Security.Principal.SecurityIdentifier]'S-1-5-32-544'
 $serviceSid = $account.SID
 $agentSid = $identity.User
 
+function Save-ManagedAcl([string]$path, $acl, [bool]$directory, [bool]$ownerChanged) {
+    try {
+        if ($ownerChanged) {
+            $fresh = if ($directory) { [Security.AccessControl.DirectorySecurity]::new() }
+                else { [Security.AccessControl.FileSecurity]::new() }
+            $sections = [Security.AccessControl.AccessControlSections]'Owner,Access'
+            $fresh.SetSecurityDescriptorSddlForm($acl.GetSecurityDescriptorSddlForm($sections), $sections)
+            Set-Acl -LiteralPath $path -AclObject $fresh
+        } elseif ($directory) {
+            [IO.FileSystemAclExtensions]::SetAccessControl([IO.DirectoryInfo]::new($path), $acl)
+        } else {
+            [IO.FileSystemAclExtensions]::SetAccessControl([IO.FileInfo]::new($path), $acl)
+        }
+    } catch { throw "ACL write failed for ${path}: $($_.Exception.Message)" }
+}
 function Set-DirectoryRights([string]$path, $owner, [bool]$agentRead) {
     if (-not (Test-Path -LiteralPath $path)) { New-Item -ItemType Directory -Path $path | Out-Null }
     $item = Get-Item -LiteralPath $path -Force
@@ -131,13 +146,13 @@ function Set-DirectoryRights([string]$path, $owner, [bool]$agentRead) {
     $acl = Get-Acl -LiteralPath $path
     $acl.SetAccessRuleProtection($true, $false)
     foreach ($rule in @($acl.Access)) { $acl.RemoveAccessRuleSpecific($rule) }
-    if ($acl.GetOwner([Security.Principal.SecurityIdentifier]).Value -ne $owner.Value) { $acl.SetOwner($owner) }
+    $ownerChanged = $acl.GetOwner([Security.Principal.SecurityIdentifier]).Value -ne $owner.Value
+    if ($ownerChanged) { $acl.SetOwner($owner) }
     foreach ($entry in @(@($system, 'FullControl'), @($admins, 'FullControl'), @($serviceSid, 'FullControl'))) {
         $acl.AddAccessRule([Security.AccessControl.FileSystemAccessRule]::new($entry[0], $entry[1], 'ContainerInherit, ObjectInherit', 'None', 'Allow'))
     }
     if ($agentRead) { $acl.AddAccessRule([Security.AccessControl.FileSystemAccessRule]::new($agentSid, 'ReadAndExecute', 'ContainerInherit, ObjectInherit', 'None', 'Allow')) }
-    try { [IO.FileSystemAclExtensions]::SetAccessControl([IO.DirectoryInfo]::new($path), $acl) }
-    catch { throw "Directory ACL write failed for ${path}: $($_.Exception.Message)" }
+    Save-ManagedAcl $path $acl $true $ownerChanged
 }
 function Set-FileRights([string]$path, [bool]$agentRead) {
     $item = Get-Item -LiteralPath $path -Force
@@ -145,13 +160,13 @@ function Set-FileRights([string]$path, [bool]$agentRead) {
     $acl = Get-Acl -LiteralPath $path
     $acl.SetAccessRuleProtection($true, $false)
     foreach ($rule in @($acl.Access)) { $acl.RemoveAccessRuleSpecific($rule) }
-    if ($acl.GetOwner([Security.Principal.SecurityIdentifier]).Value -ne $serviceSid.Value) { $acl.SetOwner($serviceSid) }
+    $ownerChanged = $acl.GetOwner([Security.Principal.SecurityIdentifier]).Value -ne $serviceSid.Value
+    if ($ownerChanged) { $acl.SetOwner($serviceSid) }
     foreach ($entry in @(@($system, 'FullControl'), @($admins, 'FullControl'), @($serviceSid, 'FullControl'))) {
         $acl.AddAccessRule([Security.AccessControl.FileSystemAccessRule]::new($entry[0], $entry[1], 'Allow'))
     }
     if ($agentRead) { $acl.AddAccessRule([Security.AccessControl.FileSystemAccessRule]::new($agentSid, 'ReadAndExecute', 'Allow')) }
-    try { [IO.FileSystemAclExtensions]::SetAccessControl([IO.FileInfo]::new($path), $acl) }
-    catch { throw "File ACL write failed for ${path}: $($_.Exception.Message)" }
+    Save-ManagedAcl $path $acl $false $ownerChanged
 }
 
 $parent = [IO.Path]::GetDirectoryName($root)
