@@ -3,9 +3,18 @@
 const net = require('node:net');
 const readline = require('node:readline');
 const fs = require('node:fs/promises');
+const fsSync = require('node:fs');
 const path = require('node:path');
 
-const pipe = `\\\\.\\pipe\\${process.env.TASK_FOLDER_MCP_PIPE || 'task-folder-mcp-v1'}`;
+let pipeName;
+try {
+  pipeName = JSON.parse(fsSync.readFileSync(path.join(__dirname, 'tracker-client.json'), 'utf8')).pipeName;
+  if (!/^[a-z0-9-]+$/.test(pipeName)) throw new Error('Invalid installed Tracker pipe name');
+} catch (error) {
+  if (error.code !== 'ENOENT') throw error;
+  pipeName = process.env.TASK_FOLDER_MCP_PIPE || 'task-folder-mcp-v1';
+}
+const pipe = `\\\\.\\pipe\\${pipeName}`;
 const tools = [
   { name: 'get_tasks_folder', inputSchema: { type: 'object', properties: {}, additionalProperties: false } },
   { name: 'get_task_projects', inputSchema: { type: 'object', properties: {}, additionalProperties: false } },

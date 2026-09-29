@@ -40,8 +40,11 @@ async function main() {
     });
   });
   await new Promise((resolve) => server.listen(`\\\\.\\pipe\\${pipeName}`, resolve));
-  const child = spawn(process.execPath, [path.join(__dirname, '..', 'src', 'mcp-adapter.js')], {
-    env: { ...process.env, TASK_FOLDER_MCP_PIPE: pipeName }, stdio: ['pipe', 'pipe', 'inherit']
+  const adapter = path.join(root, 'mcp-adapter.js');
+  fs.copyFileSync(path.join(__dirname, '..', 'src', 'mcp-adapter.js'), adapter);
+  fs.writeFileSync(path.join(root, 'tracker-client.json'), JSON.stringify({ pipeName }));
+  const child = spawn(process.execPath, [adapter], {
+    env: { ...process.env, TASK_FOLDER_MCP_PIPE: 'wrong-pipe' }, stdio: ['pipe', 'pipe', 'inherit']
   });
   const output = readline.createInterface({ input: child.stdout });
   const pending = new Map();

@@ -1,0 +1,92 @@
+param([switch]$Apply)
+
+$ErrorActionPreference = 'Stop'
+$parent = 'D:\Projects'
+$tracker = 'D:\Projects\Tracker'
+$identity = [Security.Principal.WindowsIdentity]::GetCurrent()
+$admins = [Security.Principal.SecurityIdentifier]'S-1-5-32-544'
+$system = [Security.Principal.SecurityIdentifier]'S-1-5-18'
+foreach ($path in @($parent, $tracker)) {
+    $item = Get-Item -LiteralPath $path -Force -ErrorAction Stop
+    if (-not $item.PSIsContainer -or ($item.Attributes -band [IO.FileAttributes]::ReparsePoint)) { throw "Not a plain directory: $path" }
+}
+$original = Get-Acl -LiteralPath $parent
+$owner = $original.GetOwner([Security.Principal.SecurityIdentifier]).Value
+if ($owner -ne $identity.User.Value -and $owner -ne $admins.Value) { throw "Unexpected parent owner: $owner" }
+if ($owner -eq $admins.Value -and $original.AreAccessRulesProtected) {
+    $danger = [int][Security.AccessControl.FileSystemRights]'ChangePermissions, TakeOwnership, DeleteSubdirectoriesAndFiles, Delete'
+    foreach ($rule in $original.Access) {
+        $sid = $rule.IdentityReference.Translate([Security.Principal.SecurityIdentifier]).Value
+        if ($sid -notin @($admins.Value, $system.Value) -and $rule.AccessControlType -eq 'Allow' -and
+            $rule.PropagationFlags -ne [Security.AccessControl.PropagationFlags]::InheritOnly -and
+            (([int]$rule.FileSystemRights) -band $danger)) { throw "Protected parent still has dangerous grant: $sid" }
+    }
+    Write-Output "ALREADY PROTECTED: $parent"
+    return
+}
+
+# Keep each inherited grant for children, while removing delete/ACL rights on the parent itself.
+$remove = [int][Security.AccessControl.FileSystemRights]'ChangePermissions, TakeOwnership, DeleteSubdirectoriesAndFiles, Delete'
+$proposed = [Security.AccessControl.DirectorySecurity]::new()
+$proposed.SetAccessRuleProtection($true, $false)
+$proposed.SetOwner($admins)
+foreach ($rule in $original.Access) {
+    $sid = try { $rule.IdentityReference.Translate([Security.Principal.SecurityIdentifier]) } catch { throw "Cannot resolve ACL principal $($rule.IdentityReference)" }
+    $privileged = $sid.Value -in @($admins.Value, $system.Value)
+    if ($privileged -or $rule.AccessControlType -eq 'Deny') {
+        $proposed.AddAccessRule([Security.AccessControl.FileSystemAccessRule]::new(
+            $sid, $rule.FileSystemRights, $rule.InheritanceFlags, $rule.PropagationFlags, $rule.AccessControlType))
+        continue
+    }
+    $safe = [Security.AccessControl.FileSystemRights]([int]$rule.FileSystemRights -band (-bnot $remove))
+    if ([int]$safe) {
+        $proposed.AddAccessRule([Security.AccessControl.FileSystemAccessRule]::new($sid, $safe, 'None', 'None', 'Allow'))
+    }
+    if ($rule.InheritanceFlags -ne [Security.AccessControl.InheritanceFlags]::None) {
+        $proposed.AddAccessRule([Security.AccessControl.FileSystemAccessRule]::new(
+            $sid, $rule.FileSystemRights, $rule.InheritanceFlags, 'InheritOnly', 'Allow'))
+    }
+}
+foreach ($rule in $proposed.Access) {
+    $sid = $rule.IdentityReference.Translate([Security.Principal.SecurityIdentifier]).Value
+    if ($sid -notin @($admins.Value, $system.Value) -and $rule.AccessControlType -eq 'Allow' -and
+        $rule.PropagationFlags -ne [Security.AccessControl.PropagationFlags]::InheritOnly -and
+        (([int]$rule.FileSystemRights) -band $remove)) { throw "Unsafe proposed parent grant: $sid" }
+}
+$before = @{}
+foreach ($child in Get-ChildItem -LiteralPath $parent -Force -Directory) {
+    $before[$child.FullName] = @((Get-Acl -LiteralPath $child.FullName).Access |
+        ForEach-Object { "$($_.IdentityReference.Value)|$($_.FileSystemRights)|$($_.AccessControlType)" } | Sort-Object)
+}
+if (-not $Apply) {
+    Write-Output "READY: $parent owner $owner -> Administrators; $($before.Count) child ACLs to compare"
+    return
+}
+if (-not ([Security.Principal.WindowsPrincipal]$identity).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
+    throw 'Apply requires an elevated PowerShell window.'
+}
+$repo = Split-Path -Parent $PSScriptRoot
+$reportDir = Join-Path $repo '.runtime\tests\A60-03'
+New-Item -ItemType Directory -Path $reportDir -Force | Out-Null
+$backup = Join-Path $reportDir 'projects-parent-before.sddl'
+if (Test-Path -LiteralPath $backup) { throw "ACL backup already exists: $backup" }
+[IO.File]::WriteAllText($backup, $original.GetSecurityDescriptorSddlForm('Access, Owner, Group'), [Text.UTF8Encoding]::new($false))
+try {
+    Set-Acl -LiteralPath $parent -AclObject $proposed
+    $afterAcl = Get-Acl -LiteralPath $parent
+    if ($afterAcl.GetOwner([Security.Principal.SecurityIdentifier]).Value -ne $admins.Value -or
+        -not $afterAcl.AreAccessRulesProtected) { throw 'Parent ACL verification failed.' }
+    $changed = @()
+    foreach ($path in $before.Keys) {
+        $after = @((Get-Acl -LiteralPath $path).Access |
+            ForEach-Object { "$($_.IdentityReference.Value)|$($_.FileSystemRights)|$($_.AccessControlType)" } | Sort-Object)
+        if (($after -join "`n") -ne ($before[$path] -join "`n")) { $changed += $path }
+    }
+    if ($changed.Count) { throw "Child ACLs changed: $($changed -join ', ')" }
+} catch {
+    $reason = $_.Exception.Message
+    try { Set-Acl -LiteralPath $parent -AclObject $original }
+    catch { throw "Parent ACL update failed ($reason), and rollback failed: $($_.Exception.Message); backup: $backup" }
+    throw "Parent ACL update rolled back: $reason; backup: $backup"
+}
+Write-Output "PROTECTED: $parent; owner Administrators; child ACLs unchanged; backup $backup"
