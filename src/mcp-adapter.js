@@ -23,9 +23,15 @@ const tools = [
     key: { type: 'string' }, jira_host: { type: 'string' }
   }, required: ['key', 'jira_host'], additionalProperties: false } },
   { name: 'resolve_task_folder', inputSchema: { type: 'object', properties: { key: { type: 'string' } }, required: ['key'], additionalProperties: false } },
+  { name: 'register_task_project', inputSchema: { type: 'object', properties: {
+    project_key: { type: 'string' }, name: { type: 'string' }, source_type: { type: 'string' }, jira_host: { type: 'string' }
+  }, required: ['project_key', 'source_type'], additionalProperties: false } },
   { name: 'create_local_task_folder', inputSchema: { type: 'object', properties: {
-    project_key: { type: 'string' }, title: { type: 'string' }, statement: { type: 'string' }, request_id: { type: 'string' }
-  }, required: ['project_key', 'title', 'statement', 'request_id'], additionalProperties: false } }
+    project_key: { type: 'string' }, title: { type: 'string' }, statement: { type: 'string' }
+  }, required: ['project_key', 'title', 'statement'], additionalProperties: false } },
+  { name: 'create_task_subdirectory', inputSchema: { type: 'object', properties: {
+    key: { type: 'string' }, relative_path: { type: 'string' }
+  }, required: ['key', 'relative_path'], additionalProperties: false } }
 ];
 const allowed = new Set(tools.map((tool) => tool.name));
 
@@ -63,23 +69,6 @@ function toolResult(data) {
     ...(!data.ok ? { isError: true } : {}) };
 }
 
-async function plainDirectory(dir) {
-  try {
-    const item = await fs.lstat(dir);
-    if (!item.isDirectory() || item.isSymbolicLink()) throw new Error(`Invalid task directory: ${dir}`);
-  } catch (error) {
-    if (error.code !== 'ENOENT') throw error;
-    await fs.mkdir(dir);
-  }
-}
-
-async function makeOrdinaryFolder(prepared, names) {
-  await plainDirectory(prepared.tasksFolder);
-  await plainDirectory(path.join(prepared.tasksFolder, prepared.year));
-  await plainDirectory(prepared.taskFolder);
-  for (const name of names) await plainDirectory(path.join(prepared.taskFolder, name));
-}
-
 function jiraOrigin(value) {
   if (typeof value !== 'string' || /[\r\n]/.test(value)) throw new Error('jira_host must be one HTTPS origin');
   const url = new URL(value);
@@ -101,16 +90,7 @@ async function isFile(file) {
 
 async function callTool(method, args) {
   if (method === 'create_task_folder') {
-    const result = await callService(method, args);
-    if (!result.ok) return result;
-    const names = ['origin', 'update', 'ai_actions', 'retro'];
-    const existed = await Promise.all([result.data.taskFolder, ...names.map((name) => path.join(result.data.taskFolder, name))]
-      .map(async (dir) => { try { return (await fs.stat(dir)).isDirectory(); } catch (error) {
-        if (error.code === 'ENOENT') return false; throw error;
-      } }));
-    await makeOrdinaryFolder(result.data, names);
-    return { ok: true, data: { ...result.data,
-      status: existed.every(Boolean) ? 'already_exists' : 'created' } };
+    return callService(method, args);
   }
   if (method === 'set_task_jira_host') {
     let host;
@@ -129,7 +109,6 @@ async function callTool(method, args) {
     const result = await callService(method, args);
     if (!result.ok) return result;
     const task = result.data;
-    await makeOrdinaryFolder(task, ['input', path.join('input', 'materials'), 'update', 'ai_actions', 'retro']);
     const body = `# ${args.title.trim()}\n\n${args.statement.trim()}\n`;
     try {
       await fs.writeFile(task.sourceReference, body, { flag: 'wx' });

@@ -1,6 +1,7 @@
 param(
     [Parameter(Mandatory)][string]$ConfigPath,
-    [switch]$ValidateOnly
+    [switch]$ValidateOnly,
+    [switch]$MigrateTasks
 )
 
 $ErrorActionPreference = 'Stop'
@@ -93,7 +94,18 @@ if (Test-Path -LiteralPath $root) {
         throw 'Existing service-owned Tracker root has inherited ACL.'
     }
 }
-if ($ValidateOnly) { Write-Output "VALID: $root; service: $($request.serviceName)"; return }
+if ($MigrateTasks) {
+    if (-not $service -or -not (Test-Path -LiteralPath $installedConfig)) { throw 'Install the service before migrating existing tasks.' }
+    if (Test-Path -LiteralPath (Join-Path $request.protectedRoot 'state\aidev60-metadata-migrated.json')) {
+        throw 'Tracker data was already migrated; do not repeat -MigrateTasks.'
+    }
+    & (Join-Path $PSScriptRoot 'Migrate-TrackerMetadata.ps1') -ConfigPath $installedConfig
+    & (Join-Path $PSScriptRoot 'Migrate-TrackerTasks.ps1') -ConfigPath $installedConfig -PendingMetadata
+}
+if ($ValidateOnly) {
+    Write-Output "VALID: $root; service: $($request.serviceName)"
+    return
+}
 Write-Output "Installing Tracker: $root; service: $($request.serviceName); account: $($request.serviceAccountName)"
 
 $password = $null
@@ -169,16 +181,16 @@ if (-not (Test-Path -LiteralPath $csc)) { throw 'The .NET Framework C# compiler 
 if ($service -and $service.Status -eq 'Running') { Stop-Service -Name $request.serviceName -ErrorAction Stop }
 & $csc /nologo /target:exe "/out:$exe" /reference:System.ServiceProcess.dll /reference:System.Web.Extensions.dll (Join-Path $repo 'src\ServiceHost.cs')
 if ($LASTEXITCODE -ne 0) { throw 'Service host compilation failed.' }
-foreach ($name in @('folder-worker.js', 'task-folder.js')) {
+foreach ($name in @('folder-worker.js', 'task-folder.js', 'Set-TaskDirectoryAcl.ps1')) {
     Copy-Item -LiteralPath (Join-Path $repo "src\$name") -Destination $request.installRoot -Force
 }
-foreach ($name in @('TaskTrackerService.exe', 'folder-worker.js', 'task-folder.js')) { Set-FileRights (Join-Path $request.installRoot $name) $false }
+foreach ($name in @('TaskTrackerService.exe', 'folder-worker.js', 'task-folder.js', 'Set-TaskDirectoryAcl.ps1')) { Set-FileRights (Join-Path $request.installRoot $name) $false }
 Copy-Item -LiteralPath (Join-Path $repo 'src\mcp-adapter.js') -Destination $root -Force
 Set-FileRights (Join-Path $root 'mcp-adapter.js') $true
 $clientConfig = Join-Path $root 'tracker-client.json'
 [IO.File]::WriteAllText($clientConfig, ((@{ pipeName = $request.pipeName } | ConvertTo-Json -Compress) + "`n"), [Text.UTF8Encoding]::new($false))
 Set-FileRights $clientConfig $true
-$manifestPath = Join-Path $request.protectedRoot 'projects.json'
+$manifestPath = Join-Path $root 'projects.json'
 if (-not (Test-Path -LiteralPath $manifestPath)) {
     [IO.File]::WriteAllText($manifestPath, '{"schema_version":1,"projects":[]}' + "`n", [Text.UTF8Encoding]::new($false))
 }
@@ -191,10 +203,57 @@ $config = [ordered]@{
 }
 [IO.File]::WriteAllText($installedConfig, (($config | ConvertTo-Json -Depth 3) + "`n"), [Text.UTF8Encoding]::new($false))
 Set-FileRights $installedConfig $false
+$aclBackupPath = $null
+if ($MigrateTasks) {
+    $legacy = Get-Service -Name TaskFolderMcp -ErrorAction SilentlyContinue
+    $legacyWasRunning = $legacy -and $legacy.Status -eq 'Running'
+    if ($legacyWasRunning) { Stop-Service -Name TaskFolderMcp -ErrorAction Stop }
+    try {
+        & (Join-Path $PSScriptRoot 'Migrate-TrackerMetadata.ps1') -ConfigPath $installedConfig -Apply
+        $migrationOutput = @(& (Join-Path $PSScriptRoot 'Migrate-TrackerTasks.ps1') -ConfigPath $installedConfig -Apply)
+        $migrationOutput | Write-Output
+        $finished = @($migrationOutput | Where-Object { $_ -match '^MIGRATED: .*; ACL backup (.+)$' })
+        if ($finished.Count -ne 1) { throw 'Task migration did not report its ACL backup.' }
+        $aclBackupPath = [regex]::Match($finished[0], 'ACL backup (.+)$').Groups[1].Value
+    } catch {
+        $failure = $_
+        if ($failure.Exception.Message -like '*TASK_ACL_ROLLBACK_INCOMPLETE*') { throw $failure }
+        $metadataRestored = $false
+        try {
+            & (Join-Path $PSScriptRoot 'Migrate-TrackerMetadata.ps1') -ConfigPath $installedConfig -Rollback
+            $metadataRestored = $true
+        } catch { Write-Warning "Metadata rollback failed: $($_.Exception.Message)" }
+        if ($metadataRestored -and $legacyWasRunning) {
+            try { Start-Service -Name TaskFolderMcp -ErrorAction Stop }
+            catch { Write-Warning "Legacy service restart failed: $($_.Exception.Message)" }
+        }
+        if (-not $metadataRestored) { throw "RECOVERY_INCOMPLETE: metadata rollback failed after $failure" }
+        throw $failure
+    }
+}
 if (-not $service) {
     $credential = [pscredential]::new(".\$($request.serviceAccountName)", $password)
     New-Service -Name $request.serviceName -BinaryPathName "`"$exe`" --config `"$installedConfig`"" `
         -Credential $credential -StartupType Automatic -Description 'Personal Task Tracker service' | Out-Null
 }
-Start-Service -Name $request.serviceName -ErrorAction Stop
+try { Start-Service -Name $request.serviceName -ErrorAction Stop }
+catch {
+    $failure = $_
+    if ($MigrateTasks -and $aclBackupPath) {
+        $aclRestored = $false
+        try {
+            & (Join-Path $PSScriptRoot 'Migrate-TrackerTasks.ps1') -ConfigPath $installedConfig -Rollback -BackupPath $aclBackupPath
+            $aclRestored = $true
+        } catch { Write-Warning "Task ACL rollback failed: $($_.Exception.Message)" }
+        if ($aclRestored) {
+            try { & (Join-Path $PSScriptRoot 'Migrate-TrackerMetadata.ps1') -ConfigPath $installedConfig -Rollback }
+            catch { Write-Warning "Metadata rollback failed: $($_.Exception.Message)"; $aclRestored = $false }
+        }
+        if ($aclRestored -and $legacyWasRunning) {
+            try { Start-Service -Name TaskFolderMcp -ErrorAction Stop }
+            catch { Write-Warning "Legacy service restart failed: $($_.Exception.Message)" }
+        }
+    }
+    throw $failure
+}
 Write-Output "Installed: $($request.serviceName); Tracker: $root"

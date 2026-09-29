@@ -24,11 +24,29 @@ async function main() {
       let data;
       if (method === 'create_local_task_folder') {
         const taskFolder = path.join(tasksRoot, '2026', 'TFMTEST-1');
+        for (const name of ['input/materials', 'update', 'ai_actions', 'retro']) {
+          fs.mkdirSync(path.join(taskFolder, name), { recursive: true });
+        }
         data = { tasksFolder: tasksRoot, taskFolder, year: '2026', key: 'TFMTEST-1',
           projectKey: 'TFMTEST', sourceType: 'NO_JIRA', sourceReference: path.join(taskFolder, 'input', 'task.md'), status: 'reserved' };
       } else if (method === 'create_task_folder') {
-        data = { tasksFolder: tasksRoot, taskFolder: path.join(tasksRoot, '2026', 'JIRATEST-7'),
-          year: '2026', key: 'JIRATEST-7', jiraHost: 'https://jira.example.test', status: 'prepared' };
+        const taskFolder = path.join(tasksRoot, '2026', 'JIRATEST-7');
+        const existed = fs.existsSync(taskFolder);
+        for (const name of ['origin', 'update', 'ai_actions', 'retro']) {
+          fs.mkdirSync(path.join(taskFolder, name), { recursive: true });
+        }
+        data = { tasksFolder: tasksRoot, taskFolder,
+          year: '2026', key: 'JIRATEST-7', jiraHost: 'https://jira.example.test',
+          status: existed ? 'already_exists' : 'created' };
+      } else if (method === 'create_task_subdirectory') {
+        const taskFolder = path.join(tasksRoot, '2026', 'TFMTEST-1');
+        const directory = path.join(taskFolder, args.relative_path);
+        fs.mkdirSync(directory, { recursive: true });
+        data = { key: args.key, taskFolder, directory, status: 'created' };
+      } else if (method === 'register_task_project') {
+        data = { tasksFolder: tasksRoot, status: 'created', project: {
+          project_key: args.project_key, source_type: args.source_type, jira_host: args.jira_host
+        } };
       } else if (method === 'get_task_projects') {
         data = { tasksFolder: tasksRoot, status: 'found', manifest: { schema_version: 1,
           projects: [{ project_key: 'TFMTEST', source_type: 'NO_JIRA', next_issue_number: 2 },
@@ -55,7 +73,7 @@ async function main() {
     return Promise.race([done, new Promise((_, reject) => setTimeout(() => reject(new Error('Adapter timeout')), 5000))]);
   }
   try {
-    const args = { project_key: 'TFMTEST', title: 'One', statement: 'Test statement', request_id: 'test-request-0001' };
+    const args = { project_key: 'TFMTEST', title: 'One', statement: 'Test statement' };
     const created = await request(1, 'tools/call', { name: 'create_local_task_folder', arguments: args });
     assert.equal(created.result.structuredContent.key, 'TFMTEST-1');
     assert.equal(fs.readFileSync(path.join(tasksRoot, '2026', 'TFMTEST-1', 'input', 'task.md'), 'utf8'), '# One\n\nTest statement\n');
@@ -67,6 +85,10 @@ async function main() {
     assert.equal(fs.existsSync(path.join(tasksRoot, '2026', 'JIRATEST-7', 'origin')), true);
     const jiraRepeat = await request(10, 'tools/call', { name: 'create_task_folder', arguments: { key: 'JIRATEST-7' } });
     assert.equal(jiraRepeat.result.structuredContent.status, 'already_exists');
+    const extra = await request(12, 'tools/call', { name: 'create_task_subdirectory', arguments: {
+      key: 'TFMTEST-1', relative_path: 'reports'
+    } });
+    assert.equal(extra.result.structuredContent.status, 'created');
     const host = await request(4, 'tools/call', { name: 'set_task_jira_host', arguments: {
       key: 'JIRATEST-7', jira_host: 'https://jira.example.test'
     } });
@@ -88,8 +110,10 @@ async function main() {
       key: 'JIRATEST-7', jira_host: 'https://other.example.test'
     } });
     assert.equal(wrongHost.result.structuredContent.code, 'JIRA_HOST_CONFLICT');
-    const blocked = await request(7, 'tools/call', { name: 'register_task_project', arguments: {} });
-    assert.equal(blocked.result.structuredContent.code, 'UNKNOWN_TOOL');
+    const registered = await request(7, 'tools/call', { name: 'register_task_project', arguments: {
+      project_key: 'NEW', source_type: 'JIRA_SERVER', jira_host: 'https://jira.example.test'
+    } });
+    assert.equal(registered.result.structuredContent.project.project_key, 'NEW');
     console.log('MCP adapter tests passed');
   } finally {
     child.kill();
