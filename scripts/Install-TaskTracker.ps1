@@ -106,6 +106,10 @@ if ($ValidateOnly) {
     Write-Output "VALID: $root; service: $($request.serviceName)"
     return
 }
+if ($MigrateTasks) {
+    & (Join-Path (Split-Path -Parent $PSScriptRoot) 'tests\probe-tracker-owner-transition.ps1') `
+        -ServiceAccountSid $account.SID.Value
+}
 Write-Output "Installing Tracker: $root; service: $($request.serviceName); account: $($request.serviceAccountName)"
 
 $password = $null
