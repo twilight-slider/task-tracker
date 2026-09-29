@@ -12,7 +12,9 @@ function New-Request([string]$name, [string]$trackerRoot) {
     return $configPath
 }
 $safe = New-Request 'safe' "D:\AIDEV60-preflight-$PID\Vasil"
-$unsafe = New-Request 'unsafe' 'D:\Projects\Tracker'
+$unsafeParent = Join-Path $root 'unsafe-parent'
+New-Item -ItemType Directory -Path $unsafeParent | Out-Null
+$unsafe = New-Request 'unsafe' (Join-Path $unsafeParent 'Tracker')
 & $installer -ConfigPath $safe -ValidateOnly | Out-Null
 try { & $installer -ConfigPath $unsafe -ValidateOnly | Out-Null; throw 'Unsafe parent was accepted.' }
 catch { if ($_.Exception.Message -eq 'Unsafe parent was accepted.') { throw } }

@@ -1,5 +1,6 @@
 # Byte-compiled / optimized / DLL files
 /.runtime/
+/.idea/
 __pycache__/
 *.py[codz]
 *$py.class
