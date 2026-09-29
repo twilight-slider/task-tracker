@@ -72,10 +72,9 @@ foreach ($item in @($directories) + @($files)) {
 $years = @(Get-ChildItem -LiteralPath $tasks -Directory -Force)
 if (@($years | Where-Object Name -NotMatch '^\d{4}$').Count) { throw 'Unexpected directory directly under tasks.' }
 $taskFolders = @($years | ForEach-Object { Get-ChildItem -LiteralPath $_.FullName -Directory -Force })
-if (@($taskFolders | Where-Object Name -NotMatch '^[A-Z][A-Z0-9_-]*-[1-9][0-9]*$').Count) {
-    throw 'Unexpected directory directly under a task year.'
-}
-Write-Output "READY: $($taskFolders.Count) tasks; $($directories.Count) directories; $($files.Count) files"
+$nonstandard = @($taskFolders | Where-Object Name -NotMatch '^[A-Z][A-Z0-9_-]*-[1-9][0-9]*$')
+Write-Output "READY: $($taskFolders.Count) task folders ($($nonstandard.Count) nonstandard); $($directories.Count) directories; $($files.Count) files"
+foreach ($folder in $nonstandard) { Write-Output "NONSTANDARD: $($folder.FullName)" }
 if (-not $Apply) { return }
 
 $sections = [Security.AccessControl.AccessControlSections]'Owner,Group,Access'
@@ -113,12 +112,14 @@ try {
     Set-ParentAcl $tasks
     foreach ($year in $years) { Set-ParentAcl $year.FullName }
     foreach ($folder in $taskFolders) {
-        foreach ($name in @('.protected', '.protected\snapshots')) {
-            $path = Join-Path $folder.FullName $name
-            if (-not (Test-Path -LiteralPath $path)) { New-Item -ItemType Directory -Path $path | Out-Null }
-            $item = Get-Item -LiteralPath $path -Force
-            if (-not $item.PSIsContainer -or ($item.Attributes -band [IO.FileAttributes]::ReparsePoint)) {
-                throw "Invalid protected task directory: $path"
+        if ($folder.Name -match '^[A-Z][A-Z0-9_-]*-[1-9][0-9]*$') {
+            foreach ($name in @('.protected', '.protected\snapshots')) {
+                $path = Join-Path $folder.FullName $name
+                if (-not (Test-Path -LiteralPath $path)) { New-Item -ItemType Directory -Path $path | Out-Null }
+                $item = Get-Item -LiteralPath $path -Force
+                if (-not $item.PSIsContainer -or ($item.Attributes -band [IO.FileAttributes]::ReparsePoint)) {
+                    throw "Invalid protected task directory: $path"
+                }
             }
         }
         & (Join-Path (Split-Path -Parent $PSScriptRoot) 'src\Set-TaskDirectoryAcl.ps1') `

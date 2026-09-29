@@ -6,6 +6,7 @@ $tasks = Join-Path $tracker 'tasks'
 $script = Join-Path $repo 'scripts\Migrate-TrackerTasks.ps1'
 try {
     New-Item -ItemType Directory -Path (Join-Path $tasks '2026\TEST-1\input') -Force | Out-Null
+    New-Item -ItemType Directory -Path (Join-Path $tasks '2026\TEST-1-validation') -Force | Out-Null
     New-Item -ItemType Directory -Path (Join-Path $tasks '2027') -Force | Out-Null
     $sid = [Security.Principal.WindowsIdentity]::GetCurrent().User.Value
     $config = Join-Path $testRoot 'service.json'
@@ -13,7 +14,10 @@ try {
        serviceAccountSid = $sid; agentSid = $sid } |
         ConvertTo-Json | Set-Content -LiteralPath $config
     $result = & $script -ConfigPath $config
-    if ($result -notmatch 'READY: 1 tasks; 5 directories;') { throw "Unexpected migration plan: $result" }
+    if (-not @($result | Where-Object { $_ -match 'READY: 2 task folders \(1 nonstandard\); 6 directories;' }).Count -or
+        -not @($result | Where-Object { $_ -match 'NONSTANDARD: .*TEST-1-validation$' }).Count) {
+        throw "Unexpected migration plan: $result"
+    }
     $rejected = $false
     try { & $script -ConfigPath $config -Apply | Out-Null } catch { $rejected = $true }
     if (-not $rejected) { throw 'Non-elevated task migration was accepted.' }
