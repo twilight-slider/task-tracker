@@ -44,6 +44,30 @@ internal sealed class ServiceConfig
     }
 }
 
+internal static class ProtectedRootAcl
+{
+    internal static void Repair(string configPath)
+    {
+        var root = Path.GetDirectoryName(Path.GetFullPath(configPath));
+        if ((File.GetAttributes(root) & FileAttributes.ReparsePoint) != 0)
+            throw new InvalidDataException("Protected root is a reparse point.");
+        var serviceSid = WindowsIdentity.GetCurrent().User;
+        var acl = new DirectorySecurity();
+        acl.SetAccessRuleProtection(true, false);
+        acl.SetOwner(serviceSid);
+        foreach (var sid in new[] {
+            new SecurityIdentifier("S-1-5-18"),
+            new SecurityIdentifier("S-1-5-32-544"),
+            serviceSid
+        }) {
+            acl.AddAccessRule(new FileSystemAccessRule(sid, FileSystemRights.FullControl,
+                InheritanceFlags.ContainerInherit | InheritanceFlags.ObjectInherit,
+                PropagationFlags.None, AccessControlType.Allow));
+        }
+        Directory.SetAccessControl(root, acl);
+    }
+}
+
 internal sealed class TaskFolderService : ServiceBase
 {
     private readonly ServiceConfig config;
@@ -113,6 +137,7 @@ internal sealed class TaskFolderService : ServiceBase
         var reader = new StreamReader(pipe, new UTF8Encoding(false), false, 4096, true);
         var writer = new StreamWriter(pipe, new UTF8Encoding(false), 4096, true) { AutoFlush = true };
         try {
+            ProtectedRootAcl.Repair(config.ConfigPath);
             var input = reader.ReadLineAsync();
             if (!input.Wait(30000)) throw new System.TimeoutException("Client timed out.");
             var request = input.Result;
@@ -159,6 +184,7 @@ internal sealed class TaskFolderService : ServiceBase
     {
         try {
             if (args.Length != 2 || args[0] != "--config") throw new ArgumentException("Usage: TaskFolderMcpService.exe --config <path>");
+            ProtectedRootAcl.Repair(args[1]);
             var config = ServiceConfig.Load(args[1]);
             ServiceBase.Run(new TaskFolderService(config));
             return 0;
