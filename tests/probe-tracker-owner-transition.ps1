@@ -19,7 +19,8 @@ try {
             else { [Security.AccessControl.FileSecurity]::new() }
         $acl.SetAccessRuleProtection($true, $false)
         $acl.SetOwner($service)
-        foreach ($sid in @('S-1-5-18', 'S-1-5-32-544', $service.Value)) {
+        foreach ($sid in @([Security.Principal.SecurityIdentifier]'S-1-5-18',
+                [Security.Principal.SecurityIdentifier]'S-1-5-32-544', $service)) {
             $rule = if ($directory) {
                 [Security.AccessControl.FileSystemAccessRule]::new($sid, 'FullControl', 'ContainerInherit, ObjectInherit', 'None', 'Allow')
             } else { [Security.AccessControl.FileSystemAccessRule]::new($sid, 'FullControl', 'Allow') }
