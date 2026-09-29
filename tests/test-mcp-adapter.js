@@ -3,13 +3,14 @@
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const net = require('node:net');
-const os = require('node:os');
 const path = require('node:path');
 const readline = require('node:readline');
 const { spawn } = require('node:child_process');
 
 async function main() {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'task-folder-adapter-'));
+  const testRoot = path.join(__dirname, '..', '.runtime', 'tests', 'test-mcp-adapter');
+  fs.mkdirSync(testRoot, { recursive: true });
+  const root = fs.mkdtempSync(path.join(testRoot, 'run-'));
   const tasksRoot = path.join(root, 'tasks');
   fs.mkdirSync(tasksRoot);
   const pipeName = `task-folder-mcp-test-${process.pid}`;

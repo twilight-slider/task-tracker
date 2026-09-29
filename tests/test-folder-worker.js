@@ -2,11 +2,12 @@
 
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
-const os = require('node:os');
 const path = require('node:path');
 const { spawnSync } = require('node:child_process');
 
-const root = fs.mkdtempSync(path.join(os.tmpdir(), 'task-folder-mcp-'));
+const testRoot = path.join(__dirname, '..', '.runtime', 'tests', 'test-folder-worker');
+fs.mkdirSync(testRoot, { recursive: true });
+const root = fs.mkdtempSync(path.join(testRoot, 'run-'));
 const tasksRoot = path.join(root, 'tasks');
 const protectedRoot = path.join(root, 'protected');
 const configPath = path.join(root, 'config.json');
