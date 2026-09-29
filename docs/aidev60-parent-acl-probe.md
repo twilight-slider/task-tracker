@@ -16,7 +16,7 @@
 | Удалить `Tracker-delete` | выполнено |
 | Переименовать `Tracker-rename` | выполнено |
 
-Первый вызов `Set-Acl` запросил отсутствующую `SeSecurityPrivilege` и не поменял DACL; `first-attempt.json` сохранён для диагностики инструмента. Повтор через `icacls` изменил именно DACL родителя. Итог: сервисное владение Tracker и отключённое наследование не защищают каталог, если агент владеет его родителем.
+Первый вызов `Set-Acl` запросил отсутствующую `SeSecurityPrivilege` и не поменял DACL; `first-attempt.json` сохранён для диагностики инструмента. Для итогового прогона рабочая версия `tests/probe-tracker-parent-acl.ps1` была изменена: операция `change-parent-acl` вызывает `icacls.exe $root /grant "${AgentAccount}:(F)"` и проверяет код выхода. Затем под обычным `VASIL\Vasil` из корня репозитория выполнено `pwsh -NoProfile -File tests/probe-tracker-parent-acl.ps1 -Mode Agent`; его результат — `unsafe-parent-result.json`. Эта версия скрипта теперь сохранена в Git. Итог: сервисное владение Tracker и отключённое наследование не защищают каталог, если агент владеет его родителем.
 
 Рабочий путь `D:\Projects\Tracker` небезопасен при текущей границе: и `D:\Projects`, и `D:\Projects\Tracker` принадлежат `VASIL\Vasil`; на них также есть Authenticated Users: Modify. Установщик должен отклонять такой путь. ACL существующего `D:\Projects` ради Tracker не менялся.
 

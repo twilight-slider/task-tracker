@@ -81,7 +81,7 @@ $report = [ordered]@{
     identity = $identity.Name
     sid = $identity.User.Value
     elevated = $elevated
-    integrity_sid = @($identity.Groups | Where-Object { $_.Value -like 'S-1-16-*' } | ForEach-Object Value)
+    integrity_sid = @(& whoami.exe /groups | Select-String 'S-1-16-\d+' -AllMatches | ForEach-Object { $_.Matches.Value })
     before = @((Describe-Acl $root), (Describe-Acl (Join-Path $root 'Tracker-delete')), (Describe-Acl (Join-Path $root 'Tracker-rename')))
     operations = @()
 }
@@ -90,9 +90,8 @@ function Try-Operation([string]$name, [scriptblock]$operation) {
     catch { $script:report.operations += [ordered]@{ name = $name; result = 'denied'; error = $_.Exception.Message } }
 }
 Try-Operation 'change-parent-acl' {
-    $acl = Get-Acl -LiteralPath $root
-    Add-Rule $acl $agentSid 'FullControl'
-    Set-Acl -LiteralPath $root -AclObject $acl
+    $output = & icacls.exe $root /grant "${AgentAccount}:(F)" 2>&1
+    if ($LASTEXITCODE -ne 0) { throw ($output -join "`n") }
 }
 Try-Operation 'delete-Tracker' { [IO.Directory]::Delete((Join-Path $root 'Tracker-delete'), $true) }
 Try-Operation 'rename-Tracker' { [IO.Directory]::Move((Join-Path $root 'Tracker-rename'), (Join-Path $root 'Tracker-renamed')) }
