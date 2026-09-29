@@ -11,6 +11,7 @@ try {
     $sid = [Security.Principal.WindowsIdentity]::GetCurrent().User.Value
     $configPath = Join-Path $testRoot 'service.json'
     @{ schemaVersion = 1; trackerRoot = $tracker; tasksRoot = $tasks; protectedRoot = $protected;
+       nodePath = 'C:\Program Files\nodejs\node.exe';
        serviceAccountSid = $sid; agentSid = $sid } | ConvertTo-Json | Set-Content -LiteralPath $configPath
     $legacyConfigPath = Join-Path $testRoot 'legacy\service.json'
     @{ tasksRoot = $tasks; protectedRoot = $legacyProtected } | ConvertTo-Json | Set-Content -LiteralPath $legacyConfigPath

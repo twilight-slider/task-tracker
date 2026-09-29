@@ -94,6 +94,10 @@ if ((Test-Path -LiteralPath $marker) -and
      (Test-Path -LiteralPath $obsoleteRegistry))) {
     throw 'Metadata reappeared after migration; do not delete it automatically.'
 }
+$validator = "const fs=require('node:fs');const folder=require(process.argv[1]);folder.validateManifest(JSON.parse(fs.readFileSync(process.argv[2],'utf8')));"
+if (-not (Test-Path -LiteralPath $config.nodePath -PathType Leaf)) { throw 'Configured Node executable is missing.' }
+& $config.nodePath -e $validator (Join-Path (Split-Path -Parent $PSScriptRoot) 'src\task-folder.js') $sourceRegistry
+if ($LASTEXITCODE -ne 0) { throw 'Legacy project registry failed service validation.' }
 Write-Output "READY: Tracker metadata from $tasks to $root"
 if (-not $Apply) { return }
 if ((Get-Service -Name TaskFolderMcp -ErrorAction SilentlyContinue).Status -eq 'Running') {
@@ -132,7 +136,6 @@ foreach ($project in $manifest.projects) {
 $temporary = Join-Path $config.protectedRoot ('projects-migration-' + $PID + '.tmp')
 try {
     [IO.File]::WriteAllText($temporary, (($manifest | ConvertTo-Json -Depth 6) + "`n"), [Text.UTF8Encoding]::new($false))
-    $validator = 'const fs=require("node:fs");const folder=require(process.argv[1]);folder.validateManifest(JSON.parse(fs.readFileSync(process.argv[2],"utf8")));'
     & $config.nodePath -e $validator (Join-Path (Split-Path -Parent $PSScriptRoot) 'src\task-folder.js') $temporary
     if ($LASTEXITCODE -ne 0) { throw 'Migrated project registry failed validation.' }
     if (Test-Path -LiteralPath $newRegistry) {
