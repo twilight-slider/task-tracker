@@ -33,8 +33,17 @@ try {
         }
         if ($directory) { [IO.FileSystemAclExtensions]::SetAccessControl([IO.DirectoryInfo]::new($path), $actual) }
         else { [IO.FileSystemAclExtensions]::SetAccessControl([IO.FileInfo]::new($path), $actual) }
+        $restored = if ($directory) { [Security.AccessControl.DirectorySecurity]::new() }
+            else { [Security.AccessControl.FileSecurity]::new() }
+        $sections = [Security.AccessControl.AccessControlSections]'Owner,Access'
+        $restored.SetSecurityDescriptorSddlForm($actual.GetSecurityDescriptorSddlForm($sections), $sections)
+        $restored.SetOwner($identity.User)
+        Set-Acl -LiteralPath $path -AclObject $restored
+        if ((Get-Acl -LiteralPath $path).GetOwner([Security.Principal.SecurityIdentifier]).Value -ne $identity.User.Value) {
+            throw "Owner rollback failed: $path"
+        }
     }
-    Write-Output 'OWNER PROBE PASSED: service-owned file and directory; repeated ACL write'
+    Write-Output 'OWNER PROBE PASSED: owner change, repeated ACL write, rollback'
 } finally {
     if (Test-Path -LiteralPath $root) { Remove-Item -LiteralPath $root -Recurse -Force }
 }

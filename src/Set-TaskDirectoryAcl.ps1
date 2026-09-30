@@ -32,13 +32,10 @@ function Set-TaskAcl([string]$path, [bool]$ordinary, [bool]$taskContent) {
     if (-not $Migration -and $current.GetOwner([Security.Principal.SecurityIdentifier]).Value -ne $service.Value) {
         throw "Directory is not service-owned: $path"
     }
-    $acl = $current
+    $acl = if ($Migration) { [Security.AccessControl.DirectorySecurity]::new() } else { $current }
     $acl.SetAccessRuleProtection($true, $false)
-    foreach ($rule in @($acl.Access)) { $acl.RemoveAccessRuleSpecific($rule) }
-    $ownerChanged = $Migration -and $current.GetOwner([Security.Principal.SecurityIdentifier]).Value -ne $service.Value
-    if ($ownerChanged) {
-        $acl.SetOwner($service)
-    }
+    if ($Migration) { $acl.SetOwner($service) }
+    else { foreach ($rule in @($acl.Access)) { $acl.RemoveAccessRuleSpecific($rule) } }
     foreach ($sid in @($system, $admins, $service)) {
         $acl.AddAccessRule([Security.AccessControl.FileSystemAccessRule]::new(
             $sid, 'FullControl', 'ContainerInherit, ObjectInherit', 'None', 'Allow'))
@@ -52,19 +49,28 @@ function Set-TaskAcl([string]$path, [bool]$ordinary, [bool]$taskContent) {
         }
     }
     try {
-        if ($ownerChanged) {
-            $fresh = [Security.AccessControl.DirectorySecurity]::new()
-            $sections = [Security.AccessControl.AccessControlSections]'Owner,Access'
-            $fresh.SetSecurityDescriptorSddlForm($acl.GetSecurityDescriptorSddlForm($sections), $sections)
-            Set-Acl -LiteralPath $path -AclObject $fresh
-        } else { [IO.FileSystemAclExtensions]::SetAccessControl([IO.DirectoryInfo]::new($path), $acl) }
+        if ($Migration) {
+            $currentOwner = $current.GetOwner([Security.Principal.SecurityIdentifier])
+            if (-not $current.AreAccessRulesCanonical) {
+                $canonical = [Security.AccessControl.DirectorySecurity]::new()
+                $sections = [Security.AccessControl.AccessControlSections]'Owner,Access'
+                $canonical.SetSecurityDescriptorSddlForm($acl.GetSecurityDescriptorSddlForm($sections), $sections)
+                $canonical.SetOwner($currentOwner)
+                [IO.FileSystemAclExtensions]::SetAccessControl([IO.DirectoryInfo]::new($path), $canonical)
+            }
+            if ($currentOwner.Value -ne $service.Value) { Set-Acl -LiteralPath $path -AclObject $acl }
+            else { [IO.FileSystemAclExtensions]::SetAccessControl([IO.DirectoryInfo]::new($path), $acl) }
+        }
+        else { [IO.FileSystemAclExtensions]::SetAccessControl([IO.DirectoryInfo]::new($path), $acl) }
     }
     catch { throw "ACL write failed for ${path}: $($_.Exception.Message)" }
 }
 
-Set-TaskAcl $tasksRoot $true $false
 $year = [IO.Path]::GetDirectoryName($task)
-Set-TaskAcl $year $true $false
+if (-not $Migration) {
+    Set-TaskAcl $tasksRoot $true $false
+    Set-TaskAcl $year $true $false
+}
 Set-TaskAcl $task $true $true
 foreach ($dir in Get-ChildItem -LiteralPath $task -Directory -Recurse -Force) {
     $inside = [IO.Path]::GetRelativePath($task, $dir.FullName)

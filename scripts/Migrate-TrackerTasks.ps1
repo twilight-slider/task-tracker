@@ -20,16 +20,26 @@ if (($Apply -or $Rollback) -and -not $admin) { throw 'Task migration requires el
 if ($Apply -and $Rollback) { throw 'Choose migration or rollback.' }
 function Restore-SavedAcl($entry, $sections) {
     $current = Get-Acl -LiteralPath $entry.path
-    $oldOwner = $current.GetOwner([Security.Principal.SecurityIdentifier]).Value
-    $current.SetSecurityDescriptorSddlForm([string]$entry.sddl, $sections)
-    if ($oldOwner -ne $current.GetOwner([Security.Principal.SecurityIdentifier]).Value) {
+    $saved = if ($entry.directory) { [Security.AccessControl.DirectorySecurity]::new() }
+        else { [Security.AccessControl.FileSecurity]::new() }
+    $saved.SetSecurityDescriptorSddlForm([string]$entry.sddl, $sections)
+    $targetOwner = $saved.GetOwner([Security.Principal.SecurityIdentifier]).Value
+    if ($current.GetOwner([Security.Principal.SecurityIdentifier]).Value -ne $targetOwner) {
         $fresh = if ($entry.directory) { [Security.AccessControl.DirectorySecurity]::new() }
             else { [Security.AccessControl.FileSecurity]::new() }
-        $fresh.SetSecurityDescriptorSddlForm([string]$entry.sddl, $sections)
+        $ownerAndAccess = [Security.AccessControl.AccessControlSections]'Owner,Access'
+        $fresh.SetSecurityDescriptorSddlForm($current.GetSecurityDescriptorSddlForm($ownerAndAccess), $ownerAndAccess)
+        $fresh.SetOwner([Security.Principal.SecurityIdentifier]$targetOwner)
         Set-Acl -LiteralPath $entry.path -AclObject $fresh
-    } elseif ($entry.directory) {
-        [IO.FileSystemAclExtensions]::SetAccessControl([IO.DirectoryInfo]::new($entry.path), $current)
-    } else { [IO.FileSystemAclExtensions]::SetAccessControl([IO.FileInfo]::new($entry.path), $current) }
+    }
+    $current = Get-Acl -LiteralPath $entry.path
+    $current.SetSecurityDescriptorSddlForm([string]$entry.sddl,
+        [Security.AccessControl.AccessControlSections]'Group,Access')
+    if ($entry.directory) { [IO.FileSystemAclExtensions]::SetAccessControl([IO.DirectoryInfo]::new($entry.path), $current) }
+    else { [IO.FileSystemAclExtensions]::SetAccessControl([IO.FileInfo]::new($entry.path), $current) }
+    if ((Get-Acl -LiteralPath $entry.path).GetSecurityDescriptorSddlForm($sections) -ne [string]$entry.sddl) {
+        throw "ACL rollback verification failed: $($entry.path)"
+    }
 }
 if ($Rollback) {
     $backupRoot = [IO.Path]::GetFullPath((Join-Path $config.protectedRoot 'state\acl-backups'))
@@ -76,8 +86,10 @@ if ($Apply -and (Get-Service -Name $config.serviceName -ErrorAction SilentlyCont
 $directories = @((Get-Item -LiteralPath $tasks -Force))
 $directories += @(Get-ChildItem -LiteralPath $tasks -Directory -Recurse -Force)
 $files = @(Get-ChildItem -LiteralPath $tasks -File -Recurse -Force)
+$noncanonical = @()
 foreach ($item in @($directories) + @($files)) {
     if ($item.Attributes -band [IO.FileAttributes]::ReparsePoint) { throw "Reparse point in tasks: $($item.FullName)" }
+    if (-not (Get-Acl -LiteralPath $item.FullName).AreAccessRulesCanonical) { $noncanonical += $item.FullName }
 }
 $years = @(Get-ChildItem -LiteralPath $tasks -Directory -Force)
 if (@($years | Where-Object Name -NotMatch '^\d{4}$').Count) { throw 'Unexpected directory directly under tasks.' }
@@ -85,6 +97,7 @@ $taskFolders = @($years | ForEach-Object { Get-ChildItem -LiteralPath $_.FullNam
 $nonstandard = @($taskFolders | Where-Object Name -NotMatch '^[A-Z][A-Z0-9_-]*-[1-9][0-9]*$')
 Write-Output "READY: $($taskFolders.Count) task folders ($($nonstandard.Count) nonstandard); $($directories.Count) directories; $($files.Count) files"
 foreach ($folder in $nonstandard) { Write-Output "NONSTANDARD: $($folder.FullName)" }
+foreach ($path in $noncanonical) { Write-Output "NONCANONICAL ACL: $path" }
 if (-not $Apply) { return }
 
 $sections = [Security.AccessControl.AccessControlSections]'Owner,Group,Access'
@@ -117,17 +130,28 @@ function Set-ParentAcl([string]$path) {
     if (-not $item.PSIsContainer -or ($item.Attributes -band [IO.FileAttributes]::ReparsePoint)) {
         throw "Invalid task parent: $path"
     }
-    $acl = Get-Acl -LiteralPath $path
+    $current = Get-Acl -LiteralPath $path
+    $currentOwner = $current.GetOwner([Security.Principal.SecurityIdentifier])
+    $acl = [Security.AccessControl.DirectorySecurity]::new()
     $acl.SetAccessRuleProtection($true, $false)
-    foreach ($rule in @($acl.Access)) { $acl.RemoveAccessRuleSpecific($rule) }
-    $ownerChanged = $acl.GetOwner([Security.Principal.SecurityIdentifier]).Value -ne $service.Value
-    if ($ownerChanged) { $acl.SetOwner($service) }
+    $acl.SetOwner($service)
     foreach ($sid in @($system, $admins, $service)) {
         $acl.AddAccessRule([Security.AccessControl.FileSystemAccessRule]::new(
             $sid, 'FullControl', 'ContainerInherit, ObjectInherit', 'None', 'Allow'))
     }
     $acl.AddAccessRule([Security.AccessControl.FileSystemAccessRule]::new($agent, 'ReadAndExecute', 'None', 'None', 'Allow'))
-    Save-MigratedAcl $path $acl $true $ownerChanged
+    try {
+        if (-not $current.AreAccessRulesCanonical) {
+            $canonical = [Security.AccessControl.DirectorySecurity]::new()
+            $sections = [Security.AccessControl.AccessControlSections]'Owner,Access'
+            $canonical.SetSecurityDescriptorSddlForm($acl.GetSecurityDescriptorSddlForm($sections), $sections)
+            $canonical.SetOwner($currentOwner)
+            [IO.FileSystemAclExtensions]::SetAccessControl([IO.DirectoryInfo]::new($path), $canonical)
+        }
+        if ($currentOwner.Value -ne $service.Value) { Set-Acl -LiteralPath $path -AclObject $acl }
+        else { [IO.FileSystemAclExtensions]::SetAccessControl([IO.DirectoryInfo]::new($path), $acl) }
+    }
+    catch { throw "Parent ACL write failed for ${path}: $($_.Exception.Message)" }
 }
 try {
     Set-ParentAcl $tasks
@@ -149,18 +173,30 @@ try {
     foreach ($item in $files) {
         $relative = [IO.Path]::GetRelativePath($tasks, $item.FullName)
         $protectedFile = $relative -match '^\d{4}\\[^\\]+\\\.protected\\'
-        $acl = Get-Acl -LiteralPath $item.FullName
+        $current = Get-Acl -LiteralPath $item.FullName
+        $currentOwner = $current.GetOwner([Security.Principal.SecurityIdentifier])
+        $acl = if ($current.AreAccessRulesCanonical) { $current }
+            else { [Security.AccessControl.FileSecurity]::new() }
         $acl.SetAccessRuleProtection($true, $false)
         foreach ($rule in @($acl.Access)) { $acl.RemoveAccessRuleSpecific($rule) }
-        $ownerChanged = $protectedFile -and $acl.GetOwner([Security.Principal.SecurityIdentifier]).Value -ne $service.Value
+        $ownerChanged = $protectedFile -and $currentOwner.Value -ne $service.Value
         if ($ownerChanged) {
             $acl.SetOwner($service)
+        } elseif (-not $current.AreAccessRulesCanonical) {
+            $acl.SetOwner($currentOwner)
         }
         foreach ($sid in @($system, $admins, $service)) {
             $acl.AddAccessRule([Security.AccessControl.FileSystemAccessRule]::new($sid, 'FullControl', 'Allow'))
         }
         if (-not $protectedFile) {
             $acl.AddAccessRule([Security.AccessControl.FileSystemAccessRule]::new($agent, 'FullControl', 'Allow'))
+        }
+        if (-not $current.AreAccessRulesCanonical) {
+            $canonical = [Security.AccessControl.FileSecurity]::new()
+            $access = [Security.AccessControl.AccessControlSections]'Owner,Access'
+            $canonical.SetSecurityDescriptorSddlForm($acl.GetSecurityDescriptorSddlForm($access), $access)
+            $canonical.SetOwner($currentOwner)
+            [IO.FileSystemAclExtensions]::SetAccessControl([IO.FileInfo]::new($item.FullName), $canonical)
         }
         Save-MigratedAcl $item.FullName $acl $false $ownerChanged
     }
