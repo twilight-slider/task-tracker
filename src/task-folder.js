@@ -40,7 +40,9 @@ function getConfig() {
   catch (error) { throw new TaskFolderConfigError(`Cannot read service config: ${error.message}`); }
   if (config.schemaVersion !== 1 || !path.isAbsolute(config.trackerRoot || '') ||
       !path.isAbsolute(config.tasksRoot || '') || !path.isAbsolute(config.protectedRoot || '') ||
-      config.tasksRoot !== path.join(config.trackerRoot, 'tasks')) {
+      config.tasksRoot !== path.join(config.trackerRoot, 'tasks') ||
+      (config.pwshPath !== undefined &&
+        (typeof config.pwshPath !== 'string' || !path.isAbsolute(config.pwshPath)))) {
     throw new TaskFolderConfigError('Service config has invalid storage roots');
   }
   return config;
@@ -100,7 +102,9 @@ function secureTaskFolders(taskFolder) {
   const config = getConfig();
   if (!config.serviceAccountSid || !config.agentSid) throw new TaskFolderConfigError('Service and agent SIDs are required');
   const helper = path.join(__dirname, 'Set-TaskDirectoryAcl.ps1');
-  const run = spawnSync('C:\\Program Files\\PowerShell\\7\\pwsh.exe',
+  const pwsh = config.pwshPath || (process.env.ProgramFiles && path.join(process.env.ProgramFiles, 'PowerShell', '7', 'pwsh.exe'));
+  if (!pwsh) throw new TaskFolderConfigError('pwshPath is missing');
+  const run = spawnSync(pwsh,
     ['-NoProfile', '-File', helper, '-ConfigPath', getConfigPath(), '-TaskFolder', taskFolder],
     { encoding: 'utf8', timeout: 20000 });
   if (run.error || run.status !== 0) {

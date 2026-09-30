@@ -17,24 +17,26 @@ if (-not [IO.Path]::IsPathFullyQualified($root)) { throw 'Tracker root must be a
 $root = [IO.Path]::GetFullPath($root).TrimEnd('\')
 $volume = [IO.Path]::GetPathRoot($root)
 if ($root -eq $volume.TrimEnd('\')) { throw 'Tracker root cannot be a volume root.' }
-$rid = $identity.User.Value.Split('-')[-1]
-if ($request.schemaVersion -ne 2 -or $request.ownerSid -ne $identity.User.Value -or
-    $request.agentSid -ne $identity.User.Value -or $request.trackerRoot -ne $root -or
+$rid = ([string]$request.ownerSid).Split('-')[-1]
+if ($request.schemaVersion -ne 2 -or $request.ownerSid -ne $request.agentSid -or
+    $request.ownerSid -notmatch '^S-1-5-21-(?:[0-9]+-){3}[0-9]+$' -or
+    $request.trackerRoot -ne $root -or
     $request.tasksRoot -ne (Join-Path $root 'tasks') -or
     $request.protectedRoot -ne (Join-Path $root '.protected') -or
     $request.installRoot -ne (Join-Path $root '.protected\bin') -or
     $request.serviceName -ne "TaskTracker-$rid" -or $request.pipeName -ne "task-tracker-$rid-v1" -or
     $request.serviceAccountName -notmatch '^[\p{L}\p{N}._-]{1,20}$' -or
-    $request.nodePath -ne 'C:\Program Files\nodejs\node.exe') {
+    -not [IO.Path]::IsPathFullyQualified([string]$request.nodePath)) {
     throw 'Bootstrap request is inconsistent with this user or Tracker layout.'
 }
-if (-not (Test-Path -LiteralPath $request.nodePath -PathType Leaf)) { throw 'Node executable is missing.' }
+$requestOwner = (Get-Acl -LiteralPath $ConfigPath).GetOwner([Security.Principal.SecurityIdentifier]).Value
+if ($requestOwner -ne $request.ownerSid) { throw 'Bootstrap request must be owned by its target user.' }
 $account = Get-LocalUser -Name $request.serviceAccountName -ErrorAction SilentlyContinue
 if ($request.serviceAccountSid -and (-not $account -or $request.serviceAccountSid -ne $account.SID.Value)) {
     throw 'Service account SID changed after bootstrap.'
 }
 if ($account) {
-    if ($account.SID.Value -eq $identity.User.Value) { throw 'Service account cannot be the agent account.' }
+    if ($account.SID.Value -eq $request.agentSid) { throw 'Service account cannot be the agent account.' }
     $adminGroup = Get-LocalGroup -SID 'S-1-5-32-544'
     if (Get-LocalGroupMember -Group $adminGroup.Name -ErrorAction SilentlyContinue | Where-Object { $_.SID.Value -eq $account.SID.Value }) {
         throw 'Existing service account is an administrator. Supply a dedicated standard account.'
@@ -43,6 +45,52 @@ if ($account) {
 $service = Get-Service -Name $request.serviceName -ErrorAction SilentlyContinue
 $installedConfig = Join-Path $request.protectedRoot 'service.json'
 $exe = Join-Path $request.installRoot 'TaskTrackerService.exe'
+
+# Only principals with administrative control may own or alter a path used by the service.
+$trustedSids = @('S-1-5-18', 'S-1-5-32-544', 'S-1-5-80-956008885-3418522649-1831038044-1853292631-2271478464')
+$danger = [Security.AccessControl.FileSystemRights]'ChangePermissions, TakeOwnership, DeleteSubdirectoriesAndFiles'
+function Assert-AgentCannotAlter([string]$path, [bool]$volumeRoot) {
+    $acl = Get-Acl -LiteralPath $path
+    foreach ($rule in $acl.Access) {
+        $sid = try { $rule.IdentityReference.Translate([Security.Principal.SecurityIdentifier]).Value } catch { throw "Cannot resolve ACL principal on ${path}: $($rule.IdentityReference)" }
+        if ($sid -notin $trustedSids -and $rule.PropagationFlags -ne [Security.AccessControl.PropagationFlags]::InheritOnly -and
+            $rule.AccessControlType -eq 'Allow' -and
+            (($rule.FileSystemRights -band $danger) -or (-not $volumeRoot -and
+            ($rule.FileSystemRights -band [Security.AccessControl.FileSystemRights]::Delete)))) {
+            throw "Agent can alter Tracker path: $path ($sid)"
+        }
+    }
+}
+function Assert-TrustedExecutable([string]$path) {
+    if (-not [IO.Path]::IsPathFullyQualified($path)) { throw "Executable path must be absolute: $path" }
+    $path = [IO.Path]::GetFullPath($path)
+    $file = Get-Item -LiteralPath $path -Force -ErrorAction Stop
+    if ($file.PSIsContainer) { throw "Executable is not a file: $path" }
+    $cursor = $path
+    $write = [Security.AccessControl.FileSystemRights]'WriteData, AppendData, WriteAttributes, WriteExtendedAttributes, Delete, DeleteSubdirectoriesAndFiles, ChangePermissions, TakeOwnership'
+    $rootWrite = [Security.AccessControl.FileSystemRights]'DeleteSubdirectoriesAndFiles, ChangePermissions, TakeOwnership'
+    while ($cursor) {
+        $item = Get-Item -LiteralPath $cursor -Force -ErrorAction Stop
+        if ($item.Attributes -band [IO.FileAttributes]::ReparsePoint) { throw "Executable path is a reparse point: $cursor" }
+        $acl = Get-Acl -LiteralPath $cursor
+        if ($acl.GetOwner([Security.Principal.SecurityIdentifier]).Value -notin $trustedSids) {
+            throw "Untrusted owner of executable path: $cursor"
+        }
+        $mask = if ($cursor -eq [IO.Path]::GetPathRoot($cursor)) { $rootWrite } else { $write }
+        foreach ($rule in $acl.Access) {
+            $sid = try { $rule.IdentityReference.Translate([Security.Principal.SecurityIdentifier]).Value } catch { throw "Cannot resolve ACL principal on ${cursor}: $($rule.IdentityReference)" }
+            if ($sid -notin $trustedSids -and $rule.AccessControlType -eq 'Allow' -and
+                $rule.PropagationFlags -ne [Security.AccessControl.PropagationFlags]::InheritOnly -and
+                ($rule.FileSystemRights -band $mask)) { throw "Agent can replace executable path: $cursor ($sid)" }
+        }
+        $cursor = [IO.Path]::GetDirectoryName($cursor)
+    }
+}
+$nodePath = [IO.Path]::GetFullPath([string]$request.nodePath)
+$pwshPath = (Get-Command pwsh.exe -ErrorAction Stop).Source
+$windows = [Environment]::GetFolderPath([Environment+SpecialFolder]::Windows)
+$csc = Join-Path $windows 'Microsoft.NET\Framework64\v4.0.30319\csc.exe'
+foreach ($executable in @($nodePath, $pwshPath, $csc)) { Assert-TrustedExecutable $executable }
 if ($service) {
     $actual = Get-CimInstance Win32_Service -Filter "Name='$($request.serviceName)'"
     if ($actual.PathName -ne "`"$exe`" --config `"$installedConfig`"" -or
@@ -53,22 +101,6 @@ if ($service) {
     $pinned = Get-Content -LiteralPath $installedConfig -Raw | ConvertFrom-Json
     if ($pinned.trackerRoot -ne $root) { throw 'Existing service is pinned to another Tracker.' }
 }
-
-# The agent must not own or change ACL of any existing non-volume ancestor.
-$agentSids = @($identity.User.Value, 'S-1-1-0', 'S-1-5-11', 'S-1-5-32-545')
-$danger = [Security.AccessControl.FileSystemRights]'ChangePermissions, TakeOwnership, DeleteSubdirectoriesAndFiles'
-function Assert-AgentCannotAlter([string]$path, [bool]$volumeRoot) {
-    $acl = Get-Acl -LiteralPath $path
-    foreach ($rule in $acl.Access) {
-        $sid = try { $rule.IdentityReference.Translate([Security.Principal.SecurityIdentifier]).Value } catch { $null }
-        if ($sid -in $agentSids -and $rule.PropagationFlags -ne [Security.AccessControl.PropagationFlags]::InheritOnly -and
-            $rule.AccessControlType -eq 'Allow' -and
-            (($rule.FileSystemRights -band $danger) -or (-not $volumeRoot -and
-            ($rule.FileSystemRights -band [Security.AccessControl.FileSystemRights]::Delete)))) {
-            throw "Agent can alter Tracker path: $path ($sid)"
-        }
-    }
-}
 $cursor = [IO.Path]::GetDirectoryName($root)
 while ($cursor) {
     if (Test-Path -LiteralPath $cursor) {
@@ -76,7 +108,7 @@ while ($cursor) {
         if (-not $item.PSIsContainer -or ($item.Attributes -band [IO.FileAttributes]::ReparsePoint)) { throw "Unsafe parent: $cursor" }
         $acl = Get-Acl -LiteralPath $cursor
         $owner = $acl.GetOwner([Security.Principal.SecurityIdentifier]).Value
-        if ($cursor -ne $volume -and $owner -eq $identity.User.Value) { throw "Agent owns Tracker parent: $cursor" }
+        if ($cursor -ne $volume -and $owner -notin $trustedSids) { throw "Untrusted owner of Tracker parent: $cursor" }
         Assert-AgentCannotAlter $cursor ($cursor -eq $volume)
     }
     if ($cursor -eq $volume) { break }
@@ -87,7 +119,10 @@ if (Test-Path -LiteralPath $root) {
     if (-not $item.PSIsContainer -or ($item.Attributes -band [IO.FileAttributes]::ReparsePoint)) { throw 'Tracker root is not a plain directory.' }
     $acl = Get-Acl -LiteralPath $root
     $rootOwner = $acl.GetOwner([Security.Principal.SecurityIdentifier]).Value
-    if ($rootOwner -ne $identity.User.Value -and (-not $account -or $rootOwner -ne $account.SID.Value)) {
+    $allowedRootOwners = @($request.agentSid)
+    if ($account) { $allowedRootOwners += $account.SID.Value }
+    if (-not $service) { $allowedRootOwners += 'S-1-5-32-544' }
+    if ($rootOwner -notin $allowedRootOwners) {
         throw 'Existing Tracker root belongs to an unexpected account.'
     }
     if ($rootOwner -eq $account.SID.Value -and -not $acl.AreAccessRulesProtected) {
@@ -126,7 +161,7 @@ $account.SID.GetBinaryForm($sidBytes, 0)
 $system = [Security.Principal.SecurityIdentifier]'S-1-5-18'
 $admins = [Security.Principal.SecurityIdentifier]'S-1-5-32-544'
 $serviceSid = $account.SID
-$agentSid = $identity.User
+$agentSid = [Security.Principal.SecurityIdentifier]$request.agentSid
 
 function Save-ManagedAcl([string]$path, $acl, [bool]$directory, [bool]$ownerChanged) {
     try {
@@ -199,8 +234,6 @@ Set-DirectoryRights $request.protectedRoot $serviceSid $false
 foreach ($name in @('bin', 'state', 'logs')) { Set-DirectoryRights (Join-Path $request.protectedRoot $name) $serviceSid $false }
 
 $repo = Split-Path -Parent $PSScriptRoot
-$csc = 'C:\Windows\Microsoft.NET\Framework64\v4.0.30319\csc.exe'
-if (-not (Test-Path -LiteralPath $csc)) { throw 'The .NET Framework C# compiler was not found.' }
 if ($service -and $service.Status -eq 'Running') { Stop-Service -Name $request.serviceName -ErrorAction Stop }
 & $csc /nologo /target:exe "/out:$exe" /reference:System.ServiceProcess.dll /reference:System.Web.Extensions.dll (Join-Path $repo 'src\ServiceHost.cs')
 if ($LASTEXITCODE -ne 0) { throw 'Service host compilation failed.' }
@@ -221,7 +254,7 @@ Set-FileRights $manifestPath $false
 $config = [ordered]@{
     schemaVersion = 1; trackerRoot = $root; serviceName = $request.serviceName
     serviceAccountSid = $serviceSid.Value; agentSid = $agentSid.Value; pipeName = $request.pipeName
-    nodePath = $request.nodePath; tasksRoot = $request.tasksRoot
+    nodePath = $nodePath; pwshPath = $pwshPath; tasksRoot = $request.tasksRoot
     protectedRoot = $request.protectedRoot; installRoot = $request.installRoot
 }
 [IO.File]::WriteAllText($installedConfig, (($config | ConvertTo-Json -Depth 3) + "`n"), [Text.UTF8Encoding]::new($false))
