@@ -1,8 +1,15 @@
-param([switch]$Apply)
+param(
+    [Parameter(Mandatory)][string]$TrackerRoot,
+    [switch]$Apply
+)
 
 $ErrorActionPreference = 'Stop'
-$parent = 'D:\Projects'
-$tracker = 'D:\Projects\Tracker'
+if (-not [IO.Path]::IsPathFullyQualified($TrackerRoot)) { throw 'TrackerRoot must be absolute.' }
+$tracker = [IO.Path]::GetFullPath($TrackerRoot).TrimEnd('\')
+$parent = [IO.Path]::GetDirectoryName($tracker)
+if (-not $parent -or $parent -eq [IO.Path]::GetPathRoot($tracker)) {
+    throw 'Tracker must have a dedicated parent below the volume root.'
+}
 $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
 $admins = [Security.Principal.SecurityIdentifier]'S-1-5-32-544'
 $system = [Security.Principal.SecurityIdentifier]'S-1-5-18'
@@ -12,7 +19,8 @@ foreach ($path in @($parent, $tracker)) {
 }
 $original = Get-Acl -LiteralPath $parent
 $owner = $original.GetOwner([Security.Principal.SecurityIdentifier]).Value
-if ($owner -ne $identity.User.Value -and $owner -ne $admins.Value) { throw "Unexpected parent owner: $owner" }
+$trackerOwner = (Get-Acl -LiteralPath $tracker).GetOwner([Security.Principal.SecurityIdentifier]).Value
+if ($owner -notin @($identity.User.Value, $trackerOwner, $admins.Value)) { throw "Unexpected parent owner: $owner" }
 if ($owner -eq $admins.Value -and $original.AreAccessRulesProtected) {
     $danger = [int][Security.AccessControl.FileSystemRights]'ChangePermissions, TakeOwnership, DeleteSubdirectoriesAndFiles, Delete'
     foreach ($rule in $original.Access) {
@@ -66,9 +74,10 @@ if (-not ([Security.Principal.WindowsPrincipal]$identity).IsInRole([Security.Pri
     throw 'Apply requires an elevated PowerShell window.'
 }
 $repo = Split-Path -Parent $PSScriptRoot
-$reportDir = Join-Path $repo '.runtime\tests\A60-03'
+$reportDir = Join-Path $repo '.runtime\tests\protect-tracker-parent'
 New-Item -ItemType Directory -Path $reportDir -Force | Out-Null
-$backup = Join-Path $reportDir 'projects-parent-before.sddl'
+$hash = [Convert]::ToHexString([Security.Cryptography.SHA256]::HashData([Text.Encoding]::UTF8.GetBytes($parent))).Substring(0, 12).ToLowerInvariant()
+$backup = Join-Path $reportDir "$hash-before.sddl"
 if (Test-Path -LiteralPath $backup) { throw "ACL backup already exists: $backup" }
 [IO.File]::WriteAllText($backup, $original.GetSecurityDescriptorSddlForm('Access, Owner, Group'), [Text.UTF8Encoding]::new($false))
 try {

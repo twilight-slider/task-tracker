@@ -1,4 +1,6 @@
-# AIDEV-60: установка персонального Tracker
+# AIDEV-60: протокол миграции на компьютере Vasil
+
+Это историческая запись с путями одного компьютера. Для новой установки используйте [install-new-machine.md](install-new-machine.md). При повторе исторической команды `Protect-TrackerParent.ps1` теперь требуется явно передать `-TrackerRoot D:\Projects\Tracker`.
 
 Корень Tracker задаётся существующим `TRACKER_FOLDER` в `C:\Users\<user>\.env\env.txt`. Установщик не содержит рабочего пути Tracker и не меняет `env.txt`. Сейчас у Vasil там указан `D:/Projects/Tracker`; это выбранный рабочий путь. `TASKS_FOLDER` остаётся прежним до переноса задач в следующем этапе.
 
