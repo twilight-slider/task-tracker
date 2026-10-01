@@ -12,7 +12,7 @@ $acl.SetSecurityDescriptorSddlForm($sddl, 'Access')
 Set-Acl -LiteralPath $parent -AclObject $acl
 $before = (Get-Acl -LiteralPath $parent).GetSecurityDescriptorSddlForm('Access, Owner')
 $preview = & (Join-Path $repo 'scripts\Protect-TrackerParent.ps1') -TrackerRoot $tracker
-if ($preview -notmatch '^READY:' -or $preview -notmatch '2 child ACLs') { throw "Unexpected parent preview: $preview" }
+if ($preview -notmatch '^READY:' -or $preview -notmatch '2 immediate children') { throw "Unexpected parent preview: $preview" }
 if ((Get-Acl -LiteralPath $parent).GetSecurityDescriptorSddlForm('Access, Owner') -ne $before) {
     throw 'Parent preview changed its ACL.'
 }

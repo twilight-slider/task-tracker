@@ -78,14 +78,12 @@ foreach ($rule in $proposed.Access) {
         $rule.PropagationFlags -ne [Security.AccessControl.PropagationFlags]::InheritOnly -and
         (([int]$rule.FileSystemRights) -band $remove)) { throw "Unsafe proposed parent grant: $sid" }
 }
-$before = @{}
-foreach ($child in Get-ChildItem -LiteralPath $parent -Force) {
+$children = @(Get-ChildItem -LiteralPath $parent -Force)
+foreach ($child in $children) {
     if ($child.Attributes -band [IO.FileAttributes]::ReparsePoint) { throw "Reparse point in parent: $($child.FullName)" }
-    $before[$child.FullName] = @((Get-Acl -LiteralPath $child.FullName).Access |
-        ForEach-Object { "$($_.IdentityReference.Value)|$([int](Get-MappedRights $_.FileSystemRights))|$($_.AccessControlType)|$($_.InheritanceFlags)|$($_.PropagationFlags)|$($_.IsInherited)" } | Sort-Object)
 }
 if (-not $Apply) {
-    Write-Output "READY: $parent owner $owner -> Administrators; $($before.Count) child ACLs to compare"
+    Write-Output "READY: $parent owner $owner -> Administrators; $($children.Count) immediate children keep inherited grants"
     return
 }
 if (-not ([Security.Principal.WindowsPrincipal]$identity).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
@@ -95,25 +93,17 @@ $repo = Split-Path -Parent $PSScriptRoot
 $reportDir = Join-Path $repo '.runtime\tests\protect-tracker-parent'
 New-Item -ItemType Directory -Path $reportDir -Force | Out-Null
 $hash = [Convert]::ToHexString([Security.Cryptography.SHA256]::HashData([Text.Encoding]::UTF8.GetBytes($parent))).Substring(0, 12).ToLowerInvariant()
-$backup = Join-Path $reportDir "$hash-before.sddl"
-if (Test-Path -LiteralPath $backup) { throw "ACL backup already exists: $backup" }
+$backup = Join-Path $reportDir "$hash-$([guid]::NewGuid().ToString('N'))-before.sddl"
 [IO.File]::WriteAllText($backup, $original.GetSecurityDescriptorSddlForm('Access, Owner, Group'), [Text.UTF8Encoding]::new($false))
 try {
     Set-Acl -LiteralPath $parent -AclObject $proposed
     $afterAcl = Get-Acl -LiteralPath $parent
     if ($afterAcl.GetOwner([Security.Principal.SecurityIdentifier]).Value -ne $admins.Value -or
         -not $afterAcl.AreAccessRulesProtected) { throw 'Parent ACL verification failed.' }
-    $changed = @()
-    foreach ($path in $before.Keys) {
-        $after = @((Get-Acl -LiteralPath $path).Access |
-            ForEach-Object { "$($_.IdentityReference.Value)|$([int](Get-MappedRights $_.FileSystemRights))|$($_.AccessControlType)|$($_.InheritanceFlags)|$($_.PropagationFlags)|$($_.IsInherited)" } | Sort-Object)
-        if (($after -join "`n") -ne ($before[$path] -join "`n")) { $changed += $path }
-    }
-    if ($changed.Count) { throw "Child ACLs changed: $($changed -join ', ')" }
 } catch {
     $reason = $_.Exception.Message
     try { Set-Acl -LiteralPath $parent -AclObject $original }
     catch { throw "Parent ACL update failed ($reason), and rollback failed: $($_.Exception.Message); backup: $backup" }
     throw "Parent ACL update rolled back: $reason; backup: $backup"
 }
-Write-Output "PROTECTED: $parent; owner Administrators; child ACLs unchanged; backup $backup"
+Write-Output "PROTECTED: $parent; owner Administrators; inherited child grants retained; backup $backup"

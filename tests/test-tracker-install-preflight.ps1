@@ -89,10 +89,15 @@ try {
 try { & $installer -ConfigPath $unsafe -ValidateOnly | Out-Null; throw 'Unsafe parent was accepted.' }
 catch { if ($_.Exception.Message -notmatch [regex]::Escape($personalRoot)) { throw } }
 $aclBefore = (Get-Acl -LiteralPath $personalRoot).GetSecurityDescriptorSddlForm('Access, Owner')
-$preview = @(& $installer -ConfigPath $unsafe -PrepareAcl)
-if (-not @($preview | Where-Object { $_ -match '^ACL PREVIEW READY:' }).Count -or
-    -not @($preview | Where-Object { $_ -match [regex]::Escape((Join-Path $unsafeRoot 'tasks')) }).Count) {
-    throw "Installer did not construct the ACL plan from bootstrap JSON: $preview"
+if ($insideProfile) {
+    try { & $installer -ConfigPath $unsafe -PrepareAcl | Out-Null; throw 'ACL plan accepted a Tracker inside the user profile.' }
+    catch { if ($_.Exception.Message -notmatch 'do not change this shared/system/user directory automatically') { throw } }
+} else {
+    $preview = @(& $installer -ConfigPath $unsafe -PrepareAcl)
+    if (-not @($preview | Where-Object { $_ -match '^ACL PREVIEW READY:' }).Count -or
+        -not @($preview | Where-Object { $_ -match [regex]::Escape((Join-Path $unsafeRoot 'tasks')) }).Count) {
+        throw "Installer did not construct the ACL plan from bootstrap JSON: $preview"
+    }
 }
 if ((Get-Acl -LiteralPath $personalRoot).GetSecurityDescriptorSddlForm('Access, Owner') -ne $aclBefore) {
     throw 'ACL preview changed the parent.'

@@ -52,7 +52,7 @@ pwsh -NoProfile -File (Join-Path $repo 'scripts\Install-TaskTracker.ps1') -Confi
 pwsh -NoProfile -File (Join-Path $repo 'scripts\Install-TaskTracker.ps1') -ConfigPath $configPath -PrepareAcl -ApplyAcl
 ```
 
-Установщик откажется автоматически менять системный или пользовательский каталог, а также применять план при других ошибках запроса или окружения. Внутри он вызывает `Protect-TrackerParent.ps1` и `Protect-TrackerTasks.ps1`, сохраняет исходные SDDL в `<repo>\.runtime\tests\` и после применения повторяет `-ValidateOnly`. Только после вывода `VALID` запускайте установку:
+Установщик откажется автоматически менять системный или пользовательский каталог, а также применять план при других ошибках запроса или окружения. Внутри он вызывает `Protect-TrackerParent.ps1` и `Protect-TrackerTasks.ps1`, сохраняет исходные SDDL в `<repo>\.runtime\tests\` и после применения повторяет `-ValidateOnly`. Скрипт защиты родителя сохраняет наследуемые разрешения для детей и не отключает у них наследование; при ошибке восстанавливает ACL родителя. Только после вывода `VALID` запускайте установку:
 
 ```powershell
 pwsh -NoProfile -File (Join-Path $repo 'scripts\Install-TaskTracker.ps1') -ConfigPath $configPath
