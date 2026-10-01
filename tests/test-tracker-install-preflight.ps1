@@ -4,7 +4,7 @@ $root = Join-Path $repo ('.runtime\tests\test-tracker-install-preflight\run-' + 
 New-Item -ItemType Directory -Path $root -Force | Out-Null
 $bootstrap = Join-Path $repo 'scripts\Bootstrap-TaskTracker.ps1'
 $installer = Join-Path $repo 'scripts\Install-TaskTracker.ps1'
-function Get-Service { [CmdletBinding()] param([string]$Name) return $null }
+function Get-Service { [CmdletBinding()] param([string]$Name) if ($global:fakeInstalled) { return [pscustomobject]@{ Status = 'Running' } } return $null }
 function New-Request([string]$name, [string]$trackerRoot) {
     $envPath = Join-Path $root "$name.env.txt"
     $configPath = Join-Path $root "$name.json"
@@ -109,5 +109,10 @@ catch { if ($_.Exception.Message -notmatch 'ApplyImport requires ImportExisting'
 if (-not ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
     try { & $installer -ConfigPath $unsafe -PrepareAcl -ApplyAcl | Out-Null; throw 'ACL Apply accepted a non-administrator.' }
     catch { if ($_.Exception.Message -notmatch 'elevated PowerShell') { throw } }
+    $global:fakeInstalled = $true
+    try {
+        try { & $installer -ConfigPath $unsafe -ValidateOnly | Out-Null; throw 'Installed service validation accepted a non-administrator.' }
+        catch { if ($_.Exception.Message -notmatch 'Installed Tracker checks require elevated PowerShell') { throw } }
+    } finally { $global:fakeInstalled = $false }
 }
 Write-Output 'Tracker installer preflight tests passed'

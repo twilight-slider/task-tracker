@@ -72,6 +72,9 @@ if ($account) {
     }
 }
 $service = Get-Service -Name $serviceName -ErrorAction SilentlyContinue
+if ($service -and -not $elevated -and ($ValidateOnly -or $ImportExisting)) {
+    throw 'Installed Tracker checks require elevated PowerShell because .protected\service.json is restricted.'
+}
 $installedConfig = Join-Path $root '.protected\service.json'
 $exe = Join-Path $root '.protected\bin\TaskTrackerService.exe'
 

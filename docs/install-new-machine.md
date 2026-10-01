@@ -64,6 +64,8 @@ pwsh -NoProfile -File (Join-Path $repo 'scripts\Install-TaskTracker.ps1') -Confi
 
 Если в выбранном Tracker уже есть `projects.json` и `tasks` с задачами, а `TaskFolderMcp` на компьютере отсутствует, не используйте `-MigrateTasks`. После установки администратор запускает просмотр ACL всего дерева через установщик с тем же bootstrap JSON. В выводе `READY` проверьте число каталогов и файлов, а также строки `UNREGISTERED`, `NONSTANDARD` и `NONCANONICAL`. Незарегистрированные ключи не блокируют импорт: их папки сохраняются и получают ACL службы. `projects.json` импорт не меняет; доступ к этим задачам через MCP появится после регистрации соответствующих проектов либо установки согласованного реестра. Не назначайте тип проекта по имени папки. С `-ApplyImport` установщик останавливает службу, вызывает `Migrate-TrackerTasks.ps1`, затем запускает службу; скрипт сохраняет исходные ACL каждого объекта в защищённом каталоге, задаёт права сервисной учётной записи и восстанавливает прежние ACL при ошибке. Файлы задач не удаляются и не переписываются. `tasks/AGENTS.md` остаётся на месте.
 
+После установки выполняйте `-ValidateOnly` и `-ImportExisting` в повышенной PowerShell: `.protected\service.json` намеренно недоступен обычному пользователю. Неповышенный доступ к MCP проверяется отдельно на шаге 4.
+
 ~~~powershell
 pwsh -NoProfile -File (Join-Path $repo 'scripts\Install-TaskTracker.ps1') -ConfigPath $configPath -ImportExisting
 ~~~
