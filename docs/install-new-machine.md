@@ -1,6 +1,6 @@
 # Установка Task Tracker на новом компьютере
 
-Эта инструкция описывает **новую установку**. Пути клона, личных файлов и Tracker выбираются на месте. Не используйте команды с путями Vasil из исторического [отчёта о миграции](aidev60-installation.md) и не указывайте `-MigrateTasks`.
+Эта инструкция описывает **новую установку**. Пути клона, личных файлов и Tracker выбираются на месте. Не указывайте `-MigrateTasks`.
 
 Нужны Windows, PowerShell 7, Node.js и .NET Framework C# compiler (`csc.exe`). Node.js и PowerShell должны находиться в каталогах, которые целевой пользователь не может менять: установщик проверяет ACL исполняемых файлов и их родителей. Bootstrap выполняется под целевым пользователем без повышения; защита каталогов и установка службы — под администратором, которым может быть другая учётная запись.
 
@@ -59,14 +59,11 @@ pwsh -NoProfile -File (Join-Path $repo 'scripts\Install-TaskTracker.ps1') -Confi
 
 ## 4. Подключение клиента
 
-Под обычным токеном **целевого пользователя** нужен плагин `task-folder-workflow` версии 0.5.0 или новее. Установите пользовательскую переменную, перезапустите Codex и проверьте службу и канал:
+Под обычным токеном **целевого пользователя** нужен плагин `task-folder-workflow` версии 0.5.2 или новее. Убедитесь, что в `%USERPROFILE%\.env\env.txt` есть ровно одна запись `TRACKER_FOLDER` с корнем установленного Tracker. Полностью закройте и перезапустите Codex Desktop, затем проверьте службу:
 
 ```powershell
-$trackerRoot = Read-Host 'Полный путь установленного TaskTracker'
-[Environment]::SetEnvironmentVariable('TASK_FOLDER_MCP_ADAPTER', (Join-Path $trackerRoot 'mcp-adapter.js'), 'User')
 $rid = [Security.Principal.WindowsIdentity]::GetCurrent().User.Value.Split('-')[-1]
 Get-Service -Name "TaskTracker-$rid" | Select-Object Name, Status, StartType
-'{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"get_tasks_folder","arguments":{}}}' | node (Join-Path $trackerRoot 'mcp-adapter.js')
 ```
 
-Ожидаются `Running`, `Automatic` и ответ с `<TaskTracker>\tasks`. Если клиент не подключается, администратор проверяет службу и журнал в `<TaskTracker>\.protected\logs`. Простая правка `env.txt` или перенос каталога после установки не меняют закреплённый путь службы.
+Ожидаются `Running` и `Automatic`. В Codex отдельно проверьте список опубликованных MCP-инструментов: среди них должен быть `resolve_task_folder`. Вызов `get_tasks_folder` должен вернуть `<TRACKER_FOLDER>\tasks`. Если клиент не подключается, администратор проверяет службу и журнал в `<TRACKER_FOLDER>\.protected\logs`. Простая правка `env.txt` или перенос каталога после установки не меняют закреплённый путь службы.
