@@ -56,9 +56,9 @@ catch {
     $message = $_.Exception.Message
     $parentRemedyPresent = if ($insideProfile) {
         $message -match 'Choose a dedicated Tracker location; do not change this shared/system/user directory automatically' -and
-        $message -notmatch 'Protect-TrackerParent.ps1'
+        $message -notmatch 'Only if this parent is dedicated:'
     } else {
-        $message -match 'Protect-TrackerParent.ps1[^\r\n]+-Apply'
+        $message -match 'Install-TaskTracker.ps1[^\r\n]+-PrepareAcl -ApplyAcl'
     }
     if ($message -notmatch [regex]::Escape($fakeNode) -or
         $message -notmatch [regex]::Escape($personalRoot) -or
@@ -67,13 +67,15 @@ catch {
         $message -notmatch 'installRoot' -or
         $message -notmatch 'serviceName' -or
         $message -notmatch 'TASKS_INHERITED_ACL' -or
-        $message -notmatch 'Protect-TrackerTasks.ps1[^\r\n]+-Apply' -or
+        $message -notmatch 'Install-TaskTracker.ps1[^\r\n]+-PrepareAcl -ApplyAcl' -or
         -not $parentRemedyPresent -or
         $message -notmatch 'фактически:.*требуется:.*исправить:') { throw "Preflight missed a finding or remedy: $message" }
 }
 if ((Get-Acl -LiteralPath $personalRoot).GetSecurityDescriptorSddlForm('Access, Owner') -ne $parentAclBefore) {
     throw 'ValidateOnly changed the parent ACL.'
 }
+try { & $installer -ConfigPath $combined -PrepareAcl | Out-Null; throw 'ACL plan accepted an invalid bootstrap request.' }
+catch { if ($_.Exception.Message -notmatch 'schemaVersion') { throw } }
 try { & $installer -ConfigPath $untrusted -ValidateOnly | Out-Null; throw 'User-owned Node path was accepted.' }
 catch { if ($_.Exception.Message -notmatch [regex]::Escape($fakeNode)) { throw } }
 $fakePwsh = Join-Path $root 'pwsh.exe'
@@ -86,4 +88,21 @@ try {
 } finally { $env:PATH = $oldPath }
 try { & $installer -ConfigPath $unsafe -ValidateOnly | Out-Null; throw 'Unsafe parent was accepted.' }
 catch { if ($_.Exception.Message -notmatch [regex]::Escape($personalRoot)) { throw } }
+$aclBefore = (Get-Acl -LiteralPath $personalRoot).GetSecurityDescriptorSddlForm('Access, Owner')
+$preview = @(& $installer -ConfigPath $unsafe -PrepareAcl)
+if (-not @($preview | Where-Object { $_ -match '^ACL PREVIEW READY:' }).Count -or
+    -not @($preview | Where-Object { $_ -match [regex]::Escape((Join-Path $unsafeRoot 'tasks')) }).Count) {
+    throw "Installer did not construct the ACL plan from bootstrap JSON: $preview"
+}
+if ((Get-Acl -LiteralPath $personalRoot).GetSecurityDescriptorSddlForm('Access, Owner') -ne $aclBefore) {
+    throw 'ACL preview changed the parent.'
+}
+try { & $installer -ConfigPath $unsafe -ApplyAcl | Out-Null; throw 'ApplyAcl without PrepareAcl was accepted.' }
+catch { if ($_.Exception.Message -notmatch 'ApplyAcl requires PrepareAcl') { throw } }
+try { & $installer -ConfigPath $unsafe -ApplyImport | Out-Null; throw 'ApplyImport without ImportExisting was accepted.' }
+catch { if ($_.Exception.Message -notmatch 'ApplyImport requires ImportExisting') { throw } }
+if (-not ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
+    try { & $installer -ConfigPath $unsafe -PrepareAcl -ApplyAcl | Out-Null; throw 'ACL Apply accepted a non-administrator.' }
+    catch { if ($_.Exception.Message -notmatch 'elevated PowerShell') { throw } }
+}
 Write-Output 'Tracker installer preflight tests passed'

@@ -17,32 +17,13 @@
 
 `Work` и `TaskTracker` — соседи. Пользователю можно дать полные рабочие права **на `Work`**, включая вложенные файлы и папки. На `AI` и личной папке нельзя оставлять ему `Delete`, `DeleteSubdirectoriesAndFiles`, `ChangePermissions` или `TakeOwnership`; ограниченные права чтения и записи на личной папке допустимы. Нельзя располагать Tracker внутри пользовательского профиля или внутри `Work`: тогда пользователь контролирует его родителя.
 
-Администратор создаёт `AI`, личную папку, `Work` и `TaskTracker`. Для обоих родителей Tracker проверьте план защиты, затем примените его **сверху вниз**:
-
-```powershell
-$repo = Read-Host 'Полный путь к клону task-tracker'
-$personalRoot = Read-Host 'Полный путь личной папки AI'
-$trackerRoot = Join-Path $personalRoot 'TaskTracker'
-$workRoot = Join-Path $personalRoot 'Work'
-New-Item -ItemType Directory -Path $workRoot, $trackerRoot -Force | Out-Null
-pwsh -NoProfile -File (Join-Path $repo 'scripts\Protect-TrackerParent.ps1') -TrackerRoot $personalRoot
-pwsh -NoProfile -File (Join-Path $repo 'scripts\Protect-TrackerParent.ps1') -TrackerRoot $personalRoot -Apply
-pwsh -NoProfile -File (Join-Path $repo 'scripts\Protect-TrackerParent.ps1') -TrackerRoot $trackerRoot
-pwsh -NoProfile -File (Join-Path $repo 'scripts\Protect-TrackerParent.ps1') -TrackerRoot $trackerRoot -Apply
-```
-
-Первый вызов защищает `AI`, второй — личную папку. До каждого `-Apply` проверьте вывод `READY` и точный путь родителя. Скрипт меняет владельца родителя на Administrators, удаляет опасные разрешения, сохраняет исходный SDDL в `<repo>\.runtime\tests\protect-tracker-parent\` и сверяет ACL непосредственных детей. Если каталог уже защищён, выводится `ALREADY PROTECTED`. Права на `Work` задавайте отдельно **только на `Work`**. Установщик дополнительно проверит всю цепочку родителей.
+Администратор создаёт `AI`, личную папку, `Work` и `TaskTracker`. После bootstrap установщик сам определит по JSON, какие родители и корень `tasks` требуют защиты. Права на `Work` задавайте отдельно **только на `Work`**.
 
 ### Существующая папка задач
 
-Если в `TaskTracker\tasks` уже есть данные и проверка выдаёт `TASKS_INHERITED_ACL`, администратор выполняет команды `Protect-TrackerTasks.ps1` из диагностики: сначала просмотр `READY`, затем применение с `-Apply`. Скрипт отключает наследование только на корне `tasks`, сохраняя действующие разрешения и не меняя файлы. Резервная копия ACL сохраняется в каталоге `.runtime/tests/protect-tracker-tasks` репозитория. Перед установкой проверьте расположение реестра проектов и служебных файлов; после установки проверьте доступ новой службы к существующим задачам.
+Если в `TaskTracker\tasks` уже есть данные и проверка выдаёт `TASKS_INHERITED_ACL`, режим `-PrepareAcl` включит в план и защиту корня `tasks`. Скрипт отключает наследование только на корне `tasks`, сохраняя действующие разрешения и не меняя файлы. Резервная копия ACL сохраняется в каталоге `.runtime/tests/protect-tracker-tasks` репозитория. Перед установкой проверьте расположение реестра проектов и служебных файлов; после установки проверьте доступ новой службы к существующим задачам.
 
 По [документации Microsoft о наследовании ACE](https://learn.microsoft.com/en-us/windows/win32/secauthz/ace-inheritance) защищённая DACL прекращает наследование. При обработке ACL родителя скрипт переводит [generic access rights](https://learn.microsoft.com/en-us/windows/win32/secauthz/generic-access-rights) в файловые права. SID S-1-5-32 описан как [домен BUILTIN](https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-lsat/e09da72e-e6c9-4f91-aa64-68b0475719b6), поэтому предварительная проверка не считает эту запись самой по себе действующим разрешением для пользователя; конкретные группы BUILTIN проверяются отдельно.
-
-~~~powershell
-pwsh -NoProfile -File (Join-Path $repo 'scripts\Protect-TrackerTasks.ps1') -TrackerRoot $trackerRoot
-pwsh -NoProfile -File (Join-Path $repo 'scripts\Protect-TrackerTasks.ps1') -TrackerRoot $trackerRoot -Apply
-~~~
 
 ## 2. Bootstrap под целевым пользователем
 
@@ -62,40 +43,38 @@ Bootstrap выводит путь к пользовательскому `task-tr
 ```powershell
 $repo = Read-Host 'Полный путь к клону task-tracker'
 $configPath = Read-Host 'Полный путь к task-tracker.json из bootstrap'
-pwsh -NoProfile -File (Join-Path $repo 'scripts\Install-TaskTracker.ps1') -ConfigPath $configPath -ValidateOnly
+pwsh -NoProfile -File (Join-Path $repo 'scripts\Install-TaskTracker.ps1') -ConfigPath $configPath -PrepareAcl
+```
+
+После `ACL PREVIEW READY` проверьте каждый путь `READY`: родители должны быть выделены под эту структуру. Затем выполните:
+
+```powershell
+pwsh -NoProfile -File (Join-Path $repo 'scripts\Install-TaskTracker.ps1') -ConfigPath $configPath -PrepareAcl -ApplyAcl
+```
+
+Установщик откажется автоматически менять системный или пользовательский каталог, а также применять план при других ошибках запроса или окружения. Внутри он вызывает `Protect-TrackerParent.ps1` и `Protect-TrackerTasks.ps1`, сохраняет исходные SDDL в `<repo>\.runtime\tests\` и после применения повторяет `-ValidateOnly`. Только после вывода `VALID` запускайте установку:
+
+```powershell
 pwsh -NoProfile -File (Join-Path $repo 'scripts\Install-TaskTracker.ps1') -ConfigPath $configPath
 ```
 
-`-ValidateOnly` должен сообщить `VALID` для выбранного Tracker. При отказе он выдаёт все обнаруженные проблемы за один запуск: путь, фактическое состояние, требуемое состояние и исправление. Для выделенного небезопасного родителя выводятся две полные команды `Protect-TrackerParent.ps1`: для предварительного просмотра и с `-Apply`; перед применением администратор должен убедиться, что каталог не общий. Для системного или пользовательского каталога выберите другое место. Исправьте небезопасные пути Node.js/PowerShell и повторите проверку; не обходите её. Установка выполняет ту же проверку до изменений. При первом запуске установщик запросит пароль новой локальной сервисной учётной записи, создаст автоматическую службу и запишет код и `service.json` внутри `TaskTracker\.protected`. Если каталог `TaskTracker` был заранее создан администратором, установщик передаст владение службе.
+`-ValidateOnly` должен сообщить `VALID` для выбранного Tracker. При отказе он выдаёт все обнаруженные проблемы за один запуск: путь, фактическое состояние, требуемое состояние и исправление. Подготовка ACL выполняется через `-PrepareAcl` по тому же JSON; перед применением администратор должен убедиться, что показанные каталоги не общие. Для системного или пользовательского каталога выберите другое место. Исправьте небезопасные пути Node.js/PowerShell и повторите проверку; не обходите её. Установка выполняет ту же проверку до изменений. При первом запуске установщик запросит пароль новой локальной сервисной учётной записи, создаст автоматическую службу и запишет код и `service.json` внутри `TaskTracker\.protected`. Если каталог `TaskTracker` был заранее создан администратором, установщик передаст владение службе.
 
 ### Существующие задачи без прежней службы
 
-Если в выбранном Tracker уже есть `projects.json` и `tasks` с задачами, а `TaskFolderMcp` на компьютере отсутствует, не используйте `-MigrateTasks`. После установки администратор запускает просмотр ACL всего дерева через `Migrate-TrackerTasks.ps1 -ImportExisting`. В выводе `READY` проверьте число каталогов и файлов, а также строки `UNREGISTERED`, `NONSTANDARD` и `NONCANONICAL`. Незарегистрированные ключи не блокируют импорт: их папки сохраняются и получают ACL службы. `projects.json` импорт не меняет; доступ к этим задачам через MCP появится после регистрации соответствующих проектов либо установки согласованного реестра. Не назначайте тип проекта по имени папки. С `-Apply` скрипт сохраняет исходные ACL каждого объекта в защищённом каталоге, задаёт права сервисной учётной записи и восстанавливает прежние ACL при ошибке. Файлы задач не удаляются и не переписываются. `tasks/AGENTS.md` остаётся на месте.
+Если в выбранном Tracker уже есть `projects.json` и `tasks` с задачами, а `TaskFolderMcp` на компьютере отсутствует, не используйте `-MigrateTasks`. После установки администратор запускает просмотр ACL всего дерева через установщик с тем же bootstrap JSON. В выводе `READY` проверьте число каталогов и файлов, а также строки `UNREGISTERED`, `NONSTANDARD` и `NONCANONICAL`. Незарегистрированные ключи не блокируют импорт: их папки сохраняются и получают ACL службы. `projects.json` импорт не меняет; доступ к этим задачам через MCP появится после регистрации соответствующих проектов либо установки согласованного реестра. Не назначайте тип проекта по имени папки. С `-ApplyImport` установщик останавливает службу, вызывает `Migrate-TrackerTasks.ps1`, затем запускает службу; скрипт сохраняет исходные ACL каждого объекта в защищённом каталоге, задаёт права сервисной учётной записи и восстанавливает прежние ACL при ошибке. Файлы задач не удаляются и не переписываются. `tasks/AGENTS.md` остаётся на месте.
 
 ~~~powershell
-$repo = Read-Host 'Полный путь к клону task-tracker'
-$trackerRoot = Read-Host 'Полный путь к TaskTracker'
-$installedConfig = Join-Path $trackerRoot '.protected\service.json'
-$serviceName = (Get-Content -LiteralPath $installedConfig -Raw | ConvertFrom-Json).serviceName
-& (Join-Path $repo 'scripts\Migrate-TrackerTasks.ps1') -ConfigPath $installedConfig -ImportExisting
+pwsh -NoProfile -File (Join-Path $repo 'scripts\Install-TaskTracker.ps1') -ConfigPath $configPath -ImportExisting
 ~~~
 
-Проверьте вывод READY и список отклонений. Только затем в том же повышенном окне выполните:
+Проверьте вывод `READY` и список отклонений. Только затем в том же повышенном окне выполните:
 
 ~~~powershell
-$ErrorActionPreference = 'Stop'
-Stop-Service -Name $serviceName
-$applied = $false
-try {
-    & (Join-Path $repo 'scripts\Migrate-TrackerTasks.ps1') -ConfigPath $installedConfig -ImportExisting -Apply
-    $applied = $true
-} finally {
-    if ($applied) { Start-Service -Name $serviceName }
-}
-Get-Service -Name $serviceName | Select-Object Name, Status, StartType
+pwsh -NoProfile -File (Join-Path $repo 'scripts\Install-TaskTracker.ps1') -ConfigPath $configPath -ImportExisting -ApplyImport
 ~~~
 
-Если применение завершилось ошибкой, скрипт сам восстанавливает ACL из резервной копии; запустите службу заново. Если служба не запускается после успешного применения, не повторяйте импорт: остановите службу и используйте команду Migrate-TrackerTasks.ps1 -Rollback -BackupPath с путём из строки MIGRATED, затем проверьте журнал службы.
+Если применение завершилось ошибкой, скрипт сам восстанавливает ACL из резервной копии; после проверки восстановления запустите службу заново. Если служба не запускается после успешного применения, не повторяйте импорт: остановите службу и используйте `Migrate-TrackerTasks.ps1 -Rollback -BackupPath` с путём из строки `MIGRATED`, затем проверьте журнал службы.
 
 ## 4. Подключение клиента
 
@@ -122,13 +101,15 @@ flowchart LR
   B -->|JSON в профиле пользователя| J[task-tracker.json]
   J -->|путь передан администратору| P[Install-TaskTracker.ps1 -ValidateOnly]
   P -->|список несоответствий| A[Администратор]
-  A -->|preview, затем Apply только для выделенного родителя| R[Protect-TrackerParent.ps1]
+  A -->|тот же JSON: preview, затем ApplyAcl| C[Install-TaskTracker.ps1 -PrepareAcl]
+  C -->|выделенные родители| R[Protect-TrackerParent.ps1]
   R -->|исправленный ACL| P
-  A -->|при TASKS_INHERITED_ACL: preview, затем Apply| Q[Protect-TrackerTasks.ps1]
+  C -->|при TASKS_INHERITED_ACL| Q[Protect-TrackerTasks.ps1]
   Q -->|защищённый корень tasks| P
   P -->|VALID| I[Install-TaskTracker.ps1]
   I -->|защищённый код и service.json| S[Windows-служба]
-  A -->|для существующих задач: preview, затем Apply| E[Migrate-TrackerTasks.ps1 -ImportExisting]
+  A -->|тот же JSON: ImportExisting, затем ApplyImport| K[Install-TaskTracker.ps1 -ImportExisting]
+  K -->|ACL существующего дерева| E[Migrate-TrackerTasks.ps1]
   E -->|ACL существующего дерева| T
   U -->|MCP-клиент| M[mcp-adapter.js]
   M -->|локальный named pipe| S

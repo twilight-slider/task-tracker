@@ -1,13 +1,23 @@
 param(
     [Parameter(Mandatory)][string]$ConfigPath,
     [switch]$ValidateOnly,
+    [switch]$PrepareAcl,
+    [switch]$ApplyAcl,
+    [switch]$ImportExisting,
+    [switch]$ApplyImport,
     [switch]$MigrateTasks
 )
 
 $ErrorActionPreference = 'Stop'
+$modes = @(@($ValidateOnly, $PrepareAcl, $ImportExisting, $MigrateTasks) | Where-Object { $_ }).Count
+if ($modes -gt 1 -or ($ApplyAcl -and -not $PrepareAcl) -or ($ApplyImport -and -not $ImportExisting)) {
+    throw 'Choose installation, ValidateOnly, PrepareAcl, ImportExisting, or MigrateTasks. ApplyAcl requires PrepareAcl; ApplyImport requires ImportExisting.'
+}
 $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
 $elevated = ([Security.Principal.WindowsPrincipal]$identity).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
-if (-not $ValidateOnly -and -not $elevated) { throw 'Installation requires an elevated PowerShell window.' }
+if ((-not $ValidateOnly -and -not $PrepareAcl -and -not $ImportExisting -or $ApplyAcl -or $ApplyImport) -and -not $elevated) {
+    throw 'Installation and ACL Apply require an elevated PowerShell window.'
+}
 if (-not [IO.Path]::IsPathFullyQualified($ConfigPath)) { throw 'ConfigPath must be absolute.' }
 $requestFile = Get-Item -LiteralPath $ConfigPath -Force -ErrorAction Stop
 if ($requestFile.PSIsContainer -or ($requestFile.Attributes -band [IO.FileAttributes]::ReparsePoint)) { throw 'Bootstrap request must be a regular file.' }
@@ -69,6 +79,9 @@ $exe = Join-Path $root '.protected\bin\TaskTrackerService.exe'
 $trustedSids = @('S-1-5-18', 'S-1-5-32-544', 'S-1-5-80-956008885-3418522649-1831038044-1853292631-2271478464')
 # S-1-5-32 is the BUILTIN account domain, not a user or group in an access token.
 $danger = [Security.AccessControl.FileSystemRights]'ChangePermissions, TakeOwnership, DeleteSubdirectoriesAndFiles'
+$quotedScript = (Join-Path $PSScriptRoot 'Install-TaskTracker.ps1').Replace("'", "''")
+$quotedConfig = $ConfigPath.Replace("'", "''")
+$aclCommand = "pwsh -NoProfile -File '$quotedScript' -ConfigPath '$quotedConfig' -PrepareAcl"
 function Get-ParentRemedy([string]$path) {
     if ($path -eq $volume) { return 'Choose a dedicated Tracker location below the volume root; do not change the volume ACL.' }
     $shared = @([IO.Path]::GetDirectoryName([Environment]::GetFolderPath('UserProfile')),
@@ -81,13 +94,7 @@ function Get-ParentRemedy([string]$path) {
             return 'Choose a dedicated Tracker location; do not change this shared/system/user directory automatically.'
         }
     }
-    $relative = [IO.Path]::GetRelativePath($path, $root)
-    $child = Join-Path $path ($relative.Split('\')[0])
-    $scriptPath = Join-Path $PSScriptRoot 'Protect-TrackerParent.ps1'
-    $quotedScript = $scriptPath.Replace("'", "''")
-    $quotedChild = $child.Replace("'", "''")
-    $command = "pwsh -NoProfile -File '$quotedScript' -TrackerRoot '$quotedChild'"
-    return "Only if this parent is dedicated: preview: $command; after READY, apply: $command -Apply"
+    return "Only if this parent is dedicated: preview: $aclCommand; after ACL PREVIEW READY, apply: $aclCommand -ApplyAcl"
 }
 function Test-AgentCannotAlter([string]$path, [bool]$volumeRoot) {
     try { $acl = Get-Acl -LiteralPath $path }
@@ -201,15 +208,61 @@ if (Test-Path -LiteralPath $preflightTasksRoot) {
         Add-Issue 'TASKS_NOT_PLAIN' $preflightTasksRoot 'File or reparse point' 'Plain directory' 'Replace with a plain tasks directory.'
     }
     if ($tasksAcl -and -not $tasksAcl.AreAccessRulesProtected) {
-        $scriptPath = (Join-Path $PSScriptRoot 'Protect-TrackerTasks.ps1').Replace("'", "''")
-        $quotedRoot = $root.Replace("'", "''")
-        $command = "pwsh -NoProfile -File '$scriptPath' -TrackerRoot '$quotedRoot'"
-        Add-Issue 'TASKS_INHERITED_ACL' $preflightTasksRoot 'Inherited ACL' 'Protected transitional ACL' "Preview: $command; after READY, apply: $command -Apply"
+        Add-Issue 'TASKS_INHERITED_ACL' $preflightTasksRoot 'Inherited ACL' 'Protected transitional ACL' "Preview: $aclCommand; after ACL PREVIEW READY, apply: $aclCommand -ApplyAcl"
     }
+}
+if ($PrepareAcl) {
+    $repairableCodes = @('PARENT_OWNER', 'PARENT_UNSAFE_GRANT', 'TASKS_INHERITED_ACL')
+    $otherIssues = @($issues | Where-Object { $_.Code -notin $repairableCodes })
+    $parents = @($issues | Where-Object { $_.Code -in @('PARENT_OWNER', 'PARENT_UNSAFE_GRANT') } |
+        Select-Object -ExpandProperty Path -Unique | Sort-Object Length)
+    foreach ($path in $parents) {
+        if ((Get-ParentRemedy $path) -notlike 'Only if this parent is dedicated:*') {
+            $otherIssues += @($issues | Where-Object { $_.Path -eq $path })
+        }
+    }
+    if ($otherIssues.Count) { Stop-OnIssues }
+    $parentScript = Join-Path $PSScriptRoot 'Protect-TrackerParent.ps1'
+    $tasksScript = Join-Path $PSScriptRoot 'Protect-TrackerTasks.ps1'
+    $targets = @($parents | ForEach-Object {
+        $relative = [IO.Path]::GetRelativePath($_, $root)
+        Join-Path $_ ($relative.Split('\')[0])
+    })
+    foreach ($target in $targets) { & $parentScript -TrackerRoot $target }
+    if (@($issues | Where-Object Code -eq 'TASKS_INHERITED_ACL').Count) { & $tasksScript -TrackerRoot $root }
+    if (-not $ApplyAcl) { Write-Output 'ACL PREVIEW READY: run this installer with -PrepareAcl -ApplyAcl after reviewing the dedicated parent paths.'; return }
+    foreach ($target in $targets) { & $parentScript -TrackerRoot $target -Apply }
+    if (@($issues | Where-Object Code -eq 'TASKS_INHERITED_ACL').Count) { & $tasksScript -TrackerRoot $root -Apply }
+    & $PSCommandPath -ConfigPath $ConfigPath -ValidateOnly
+    return
 }
 Stop-OnIssues
 if ($ValidateOnly) {
     Write-Output "VALID: $root; service: $($request.serviceName)"
+    return
+}
+if ($ImportExisting) {
+    if (-not $service -or -not (Test-Path -LiteralPath $installedConfig -PathType Leaf)) {
+        throw 'Install the Tracker service before importing existing task ACLs.'
+    }
+    $importScript = Join-Path $PSScriptRoot 'Migrate-TrackerTasks.ps1'
+    if (-not $ApplyImport) { & $importScript -ConfigPath $installedConfig -ImportExisting; return }
+    & $importScript -ConfigPath $installedConfig -ImportExisting
+    $wasRunning = $service.Status -eq 'Running'
+    if ($wasRunning) { Stop-Service -Name $serviceName -ErrorAction Stop }
+    try {
+        & $importScript -ConfigPath $installedConfig -ImportExisting -Apply
+        if ($wasRunning) {
+            Start-Service -Name $serviceName -ErrorAction Stop
+            $state = Get-Service -Name $serviceName -ErrorAction Stop
+            if ($state.Status -ne 'Running' -or $state.StartType -ne 'Automatic') {
+                throw "Service did not reach Running/Automatic after import: $($state.Status)/$($state.StartType)"
+            }
+        }
+    } catch {
+        if ($wasRunning) { Write-Warning "Service $serviceName remains stopped; check the ACL rollback result before restarting it." }
+        throw
+    }
     return
 }
 if ($MigrateTasks) {
