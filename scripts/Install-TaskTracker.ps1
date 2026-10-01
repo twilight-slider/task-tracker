@@ -67,6 +67,7 @@ $exe = Join-Path $root '.protected\bin\TaskTrackerService.exe'
 
 # Only principals with administrative control may own or alter a path used by the service.
 $trustedSids = @('S-1-5-18', 'S-1-5-32-544', 'S-1-5-80-956008885-3418522649-1831038044-1853292631-2271478464')
+# S-1-5-32 is the BUILTIN account domain, not a user or group in an access token.
 $danger = [Security.AccessControl.FileSystemRights]'ChangePermissions, TakeOwnership, DeleteSubdirectoriesAndFiles'
 function Get-ParentRemedy([string]$path) {
     if ($path -eq $volume) { return 'Choose a dedicated Tracker location below the volume root; do not change the volume ACL.' }
@@ -92,13 +93,14 @@ function Test-AgentCannotAlter([string]$path, [bool]$volumeRoot) {
     try { $acl = Get-Acl -LiteralPath $path }
     catch { Add-Issue 'PARENT_ACL_UNREADABLE' $path $_.Exception.Message 'Readable ACL' 'Fix access to this directory and retry.'; return }
     foreach ($rule in $acl.Access) {
+        $mask = ([long][int]$rule.FileSystemRights) -band [long]4294967295
         if ($rule.PropagationFlags -eq [Security.AccessControl.PropagationFlags]::InheritOnly -or
             $rule.AccessControlType -ne 'Allow' -or
-            (-not ($rule.FileSystemRights -band $danger) -and ($volumeRoot -or
-            -not ($rule.FileSystemRights -band [Security.AccessControl.FileSystemRights]::Delete)))) { continue }
+            (-not ($mask -band $danger) -and -not ($mask -band [long]268435456) -and ($volumeRoot -or
+            -not ($mask -band [Security.AccessControl.FileSystemRights]::Delete)))) { continue }
         $sid = try { $rule.IdentityReference.Translate([Security.Principal.SecurityIdentifier]).Value }
             catch { Add-Issue 'PARENT_SID_UNRESOLVED' $path ([string]$rule.IdentityReference) 'Resolvable ACL principal' (Get-ParentRemedy $path); continue }
-        if ($sid -notin $trustedSids) {
+        if ($sid -notin $trustedSids -and $sid -ne 'S-1-5-32') {
             Add-Issue 'PARENT_UNSAFE_GRANT' $path "$sid has $($rule.FileSystemRights)" 'No untrusted effective Delete, DeleteSubdirectoriesAndFiles, ChangePermissions or TakeOwnership' (Get-ParentRemedy $path)
         }
     }
@@ -121,12 +123,14 @@ function Test-TrustedExecutable([string]$path) {
         }
         $mask = if ($cursor -eq [IO.Path]::GetPathRoot($cursor)) { $rootWrite } else { $write }
         foreach ($rule in $acl.Access) {
+            $rights = ([long][int]$rule.FileSystemRights) -band [long]4294967295
             if ($rule.AccessControlType -ne 'Allow' -or
                 $rule.PropagationFlags -eq [Security.AccessControl.PropagationFlags]::InheritOnly -or
-                -not ($rule.FileSystemRights -band $mask)) { continue }
+                (-not ($rights -band $mask) -and -not ($rights -band [long]268435456) -and
+                ($cursor -eq [IO.Path]::GetPathRoot($cursor) -or -not ($rights -band [long]1073741824)))) { continue }
             $sid = try { $rule.IdentityReference.Translate([Security.Principal.SecurityIdentifier]).Value }
                 catch { Add-Issue 'EXECUTABLE_SID_UNRESOLVED' $cursor ([string]$rule.IdentityReference) 'Resolvable ACL principal' 'Fix the executable ACL.'; continue }
-            if ($sid -notin $trustedSids) { Add-Issue 'EXECUTABLE_UNSAFE_GRANT' $cursor "$sid has $($rule.FileSystemRights)" 'No untrusted effective write/delete/ACL rights' 'Install the executable in a protected administrator-owned directory.' }
+            if ($sid -notin $trustedSids -and $sid -ne 'S-1-5-32') { Add-Issue 'EXECUTABLE_UNSAFE_GRANT' $cursor "$sid has $($rule.FileSystemRights)" 'No untrusted effective write/delete/ACL rights' 'Install the executable in a protected administrator-owned directory.' }
         }
         $cursor = [IO.Path]::GetDirectoryName($cursor)
     }
@@ -197,7 +201,10 @@ if (Test-Path -LiteralPath $preflightTasksRoot) {
         Add-Issue 'TASKS_NOT_PLAIN' $preflightTasksRoot 'File or reparse point' 'Plain directory' 'Replace with a plain tasks directory.'
     }
     if ($tasksAcl -and -not $tasksAcl.AreAccessRulesProtected) {
-        Add-Issue 'TASKS_INHERITED_ACL' $preflightTasksRoot 'Inherited ACL' 'Protected transitional ACL' 'Protect the existing tasks ACL as administrator before installation.'
+        $scriptPath = (Join-Path $PSScriptRoot 'Protect-TrackerTasks.ps1').Replace("'", "''")
+        $quotedRoot = $root.Replace("'", "''")
+        $command = "pwsh -NoProfile -File '$scriptPath' -TrackerRoot '$quotedRoot'"
+        Add-Issue 'TASKS_INHERITED_ACL' $preflightTasksRoot 'Inherited ACL' 'Protected transitional ACL' "Preview: $command; after READY, apply: $command -Apply"
     }
 }
 Stop-OnIssues

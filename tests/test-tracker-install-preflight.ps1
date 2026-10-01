@@ -23,6 +23,18 @@ foreach ($target in @($personalRoot, $unsafeRoot)) {
     $preview = & (Join-Path $repo 'scripts\Protect-TrackerParent.ps1') -TrackerRoot $target
     if ($preview -notmatch '^READY:') { throw "Parent ACL preview did not use $target" }
 }
+$tasksPreview = & (Join-Path $repo 'scripts\Protect-TrackerTasks.ps1') -TrackerRoot $unsafeRoot
+if ($tasksPreview -notmatch '^READY:' -or (Get-Acl -LiteralPath (Join-Path $unsafeRoot 'tasks')).AreAccessRulesProtected) {
+    throw 'Existing tasks ACL preview changed or failed to identify inheritance.'
+}
+if (-not ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
+    try {
+        & (Join-Path $repo 'scripts\Protect-TrackerTasks.ps1') -TrackerRoot $unsafeRoot -Apply | Out-Null
+        throw 'Tasks ACL Apply accepted a non-administrator.'
+    } catch {
+        if ($_.Exception.Message -notmatch 'Apply requires an elevated PowerShell window') { throw }
+    }
+}
 $unsafe = New-Request 'unsafe' $unsafeRoot
 $untrusted = New-Request 'untrusted-node' $safeRoot
 $fakeNode = Join-Path $root 'node.exe'
@@ -37,9 +49,17 @@ $request.nodePath = $fakeNode
 foreach ($field in @('protectedRoot', 'installRoot', 'serviceName')) { $request.PSObject.Properties.Remove($field) }
 [IO.File]::WriteAllText($combined, (($request | ConvertTo-Json -Depth 3) + "`n"), [Text.UTF8Encoding]::new($false))
 $parentAclBefore = (Get-Acl -LiteralPath $personalRoot).GetSecurityDescriptorSddlForm('Access, Owner')
+$profile = [Environment]::GetFolderPath('UserProfile').TrimEnd('\')
+$insideProfile = $personalRoot.StartsWith("$profile\", [StringComparison]::OrdinalIgnoreCase)
 try { & $installer -ConfigPath $combined -ValidateOnly | Out-Null; throw 'Combined unsafe paths were accepted.' }
 catch {
     $message = $_.Exception.Message
+    $parentRemedyPresent = if ($insideProfile) {
+        $message -match 'Choose a dedicated Tracker location; do not change this shared/system/user directory automatically' -and
+        $message -notmatch 'Protect-TrackerParent.ps1'
+    } else {
+        $message -match 'Protect-TrackerParent.ps1[^\r\n]+-Apply'
+    }
     if ($message -notmatch [regex]::Escape($fakeNode) -or
         $message -notmatch [regex]::Escape($personalRoot) -or
         $message -notmatch 'schemaVersion' -or
@@ -47,8 +67,8 @@ catch {
         $message -notmatch 'installRoot' -or
         $message -notmatch 'serviceName' -or
         $message -notmatch 'TASKS_INHERITED_ACL' -or
-        $message -notmatch 'Protect-TrackerParent.ps1' -or
-        $message -notmatch 'Protect-TrackerParent.ps1[^\r\n]+-Apply' -or
+        $message -notmatch 'Protect-TrackerTasks.ps1[^\r\n]+-Apply' -or
+        -not $parentRemedyPresent -or
         $message -notmatch 'фактически:.*требуется:.*исправить:') { throw "Preflight missed a finding or remedy: $message" }
 }
 if ((Get-Acl -LiteralPath $personalRoot).GetSecurityDescriptorSddlForm('Access, Owner') -ne $parentAclBefore) {
@@ -64,7 +84,6 @@ try {
     try { & $installer -ConfigPath $safe -ValidateOnly | Out-Null; throw 'User-owned PowerShell path was accepted.' }
     catch { if ($_.Exception.Message -notmatch [regex]::Escape($fakePwsh)) { throw } }
 } finally { $env:PATH = $oldPath }
-& $installer -ConfigPath $safe -ValidateOnly | Out-Null
 try { & $installer -ConfigPath $unsafe -ValidateOnly | Out-Null; throw 'Unsafe parent was accepted.' }
 catch { if ($_.Exception.Message -notmatch [regex]::Escape($personalRoot)) { throw } }
 Write-Output 'Tracker installer preflight tests passed'
