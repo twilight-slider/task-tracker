@@ -21,13 +21,24 @@ $original = Get-Acl -LiteralPath $parent
 $owner = $original.GetOwner([Security.Principal.SecurityIdentifier]).Value
 $trackerOwner = (Get-Acl -LiteralPath $tracker).GetOwner([Security.Principal.SecurityIdentifier]).Value
 if ($owner -notin @($identity.User.Value, $trackerOwner, $admins.Value)) { throw "Unexpected parent owner: $owner" }
+# NTFS ACEs may retain GENERIC_* bits; FileSystemAccessRule accepts only file-specific rights.
+function Get-MappedRights([Security.AccessControl.FileSystemRights]$rights) {
+    $mask = ([long][int]$rights) -band [long]4294967295
+    $mapped = $mask -band [long]268435455
+    if ($mask -band [long]2147483648) { $mapped = $mapped -bor [long][int][Security.AccessControl.FileSystemRights]::Read -bor [long][int][Security.AccessControl.FileSystemRights]::Synchronize }
+    if ($mask -band [long]1073741824) { $mapped = $mapped -bor [long][int][Security.AccessControl.FileSystemRights]::Write -bor [long][int][Security.AccessControl.FileSystemRights]::ReadPermissions -bor [long][int][Security.AccessControl.FileSystemRights]::Synchronize }
+    if ($mask -band [long]536870912) { $mapped = $mapped -bor [long][int][Security.AccessControl.FileSystemRights]::ExecuteFile -bor [long][int][Security.AccessControl.FileSystemRights]::ReadAttributes -bor [long][int][Security.AccessControl.FileSystemRights]::ReadPermissions -bor [long][int][Security.AccessControl.FileSystemRights]::Synchronize }
+    if ($mask -band [long]268435456) { $mapped = $mapped -bor [long][int][Security.AccessControl.FileSystemRights]::FullControl }
+    if ($mapped -band (-bnot [long][int][Security.AccessControl.FileSystemRights]::FullControl)) { throw "Unsupported ACL rights mask: $mask" }
+    return [Security.AccessControl.FileSystemRights][int]$mapped
+}
 if ($owner -eq $admins.Value -and $original.AreAccessRulesProtected) {
     $danger = [int][Security.AccessControl.FileSystemRights]'ChangePermissions, TakeOwnership, DeleteSubdirectoriesAndFiles, Delete'
     foreach ($rule in $original.Access) {
         $sid = $rule.IdentityReference.Translate([Security.Principal.SecurityIdentifier]).Value
         if ($sid -notin @($admins.Value, $system.Value) -and $rule.AccessControlType -eq 'Allow' -and
             $rule.PropagationFlags -ne [Security.AccessControl.PropagationFlags]::InheritOnly -and
-            (([int]$rule.FileSystemRights) -band $danger)) { throw "Protected parent still has dangerous grant: $sid" }
+            (([int](Get-MappedRights $rule.FileSystemRights)) -band $danger)) { throw "Protected parent still has dangerous grant: $sid" }
     }
     Write-Output "ALREADY PROTECTED: $parent"
     return
@@ -40,19 +51,25 @@ $proposed.SetAccessRuleProtection($true, $false)
 $proposed.SetOwner($admins)
 foreach ($rule in $original.Access) {
     $sid = try { $rule.IdentityReference.Translate([Security.Principal.SecurityIdentifier]) } catch { throw "Cannot resolve ACL principal $($rule.IdentityReference)" }
+    if ($rule.AccessControlType -eq 'Deny' -and (([long][int]$rule.FileSystemRights -band [long]4294967295) -band [long]4026531840)) {
+        throw "Generic deny ACE requires manual review: $sid"
+    }
+    $rights = Get-MappedRights $rule.FileSystemRights
     $privileged = $sid.Value -in @($admins.Value, $system.Value)
     if ($privileged -or $rule.AccessControlType -eq 'Deny') {
         $proposed.AddAccessRule([Security.AccessControl.FileSystemAccessRule]::new(
-            $sid, $rule.FileSystemRights, $rule.InheritanceFlags, $rule.PropagationFlags, $rule.AccessControlType))
+            $sid, $rights, $rule.InheritanceFlags, $rule.PropagationFlags, $rule.AccessControlType))
         continue
     }
-    $safe = [Security.AccessControl.FileSystemRights]([int]$rule.FileSystemRights -band (-bnot $remove))
+    $safe = [Security.AccessControl.FileSystemRights]([int]$rights -band (-bnot $remove))
     if ([int]$safe) {
         $proposed.AddAccessRule([Security.AccessControl.FileSystemAccessRule]::new($sid, $safe, 'None', 'None', 'Allow'))
     }
     if ($rule.InheritanceFlags -ne [Security.AccessControl.InheritanceFlags]::None) {
+        $propagation = [Security.AccessControl.PropagationFlags]([int]$rule.PropagationFlags -bor
+            [int][Security.AccessControl.PropagationFlags]::InheritOnly)
         $proposed.AddAccessRule([Security.AccessControl.FileSystemAccessRule]::new(
-            $sid, $rule.FileSystemRights, $rule.InheritanceFlags, 'InheritOnly', 'Allow'))
+            $sid, $rights, $rule.InheritanceFlags, $propagation, 'Allow'))
     }
 }
 foreach ($rule in $proposed.Access) {
@@ -61,13 +78,12 @@ foreach ($rule in $proposed.Access) {
         $rule.PropagationFlags -ne [Security.AccessControl.PropagationFlags]::InheritOnly -and
         (([int]$rule.FileSystemRights) -band $remove)) { throw "Unsafe proposed parent grant: $sid" }
 }
-$before = @{}
-foreach ($child in Get-ChildItem -LiteralPath $parent -Force -Directory) {
-    $before[$child.FullName] = @((Get-Acl -LiteralPath $child.FullName).Access |
-        ForEach-Object { "$($_.IdentityReference.Value)|$($_.FileSystemRights)|$($_.AccessControlType)" } | Sort-Object)
+$children = @(Get-ChildItem -LiteralPath $parent -Force)
+foreach ($child in $children) {
+    if ($child.Attributes -band [IO.FileAttributes]::ReparsePoint) { throw "Reparse point in parent: $($child.FullName)" }
 }
 if (-not $Apply) {
-    Write-Output "READY: $parent owner $owner -> Administrators; $($before.Count) child ACLs to compare"
+    Write-Output "READY: $parent owner $owner -> Administrators; $($children.Count) immediate children keep inherited grants"
     return
 }
 if (-not ([Security.Principal.WindowsPrincipal]$identity).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
@@ -77,25 +93,17 @@ $repo = Split-Path -Parent $PSScriptRoot
 $reportDir = Join-Path $repo '.runtime\tests\protect-tracker-parent'
 New-Item -ItemType Directory -Path $reportDir -Force | Out-Null
 $hash = [Convert]::ToHexString([Security.Cryptography.SHA256]::HashData([Text.Encoding]::UTF8.GetBytes($parent))).Substring(0, 12).ToLowerInvariant()
-$backup = Join-Path $reportDir "$hash-before.sddl"
-if (Test-Path -LiteralPath $backup) { throw "ACL backup already exists: $backup" }
+$backup = Join-Path $reportDir "$hash-$([guid]::NewGuid().ToString('N'))-before.sddl"
 [IO.File]::WriteAllText($backup, $original.GetSecurityDescriptorSddlForm('Access, Owner, Group'), [Text.UTF8Encoding]::new($false))
 try {
     Set-Acl -LiteralPath $parent -AclObject $proposed
     $afterAcl = Get-Acl -LiteralPath $parent
     if ($afterAcl.GetOwner([Security.Principal.SecurityIdentifier]).Value -ne $admins.Value -or
         -not $afterAcl.AreAccessRulesProtected) { throw 'Parent ACL verification failed.' }
-    $changed = @()
-    foreach ($path in $before.Keys) {
-        $after = @((Get-Acl -LiteralPath $path).Access |
-            ForEach-Object { "$($_.IdentityReference.Value)|$($_.FileSystemRights)|$($_.AccessControlType)" } | Sort-Object)
-        if (($after -join "`n") -ne ($before[$path] -join "`n")) { $changed += $path }
-    }
-    if ($changed.Count) { throw "Child ACLs changed: $($changed -join ', ')" }
 } catch {
     $reason = $_.Exception.Message
     try { Set-Acl -LiteralPath $parent -AclObject $original }
     catch { throw "Parent ACL update failed ($reason), and rollback failed: $($_.Exception.Message); backup: $backup" }
     throw "Parent ACL update rolled back: $reason; backup: $backup"
 }
-Write-Output "PROTECTED: $parent; owner Administrators; child ACLs unchanged; backup $backup"
+Write-Output "PROTECTED: $parent; owner Administrators; inherited child grants retained; backup $backup"

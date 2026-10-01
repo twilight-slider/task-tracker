@@ -2,6 +2,7 @@ param(
     [Parameter(Mandatory)][string]$ConfigPath,
     [switch]$Apply,
     [switch]$PendingMetadata,
+    [switch]$ImportExisting,
     [switch]$Rollback,
     [string]$BackupPath
 )
@@ -73,9 +74,24 @@ if ($Rollback) {
     return
 }
 if ($Apply -and $PendingMetadata) { throw 'PendingMetadata is only valid for dry-run.' }
+if ($ImportExisting -and $PendingMetadata) { throw 'Choose legacy metadata migration or existing-task import.' }
 if (-not $PendingMetadata) {
-    if (Test-Path -LiteralPath (Join-Path $tasks 'AGENTS.md')) { throw 'Move tasks/AGENTS.md to Tracker root before migration.' }
+    if (-not $ImportExisting -and (Test-Path -LiteralPath (Join-Path $tasks 'AGENTS.md'))) {
+        throw 'Move tasks/AGENTS.md to Tracker root before migration.'
+    }
     if (Test-Path -LiteralPath (Join-Path $tasks 'projects.json')) { throw 'Move tasks/projects.json to Tracker root before migration.' }
+}
+if ($ImportExisting) {
+    $installedConfig = Join-Path $config.protectedRoot 'service.json'
+    $manifestPath = Join-Path $root 'projects.json'
+    if ([IO.Path]::GetFullPath($ConfigPath) -ne $installedConfig -or
+        -not (Test-Path -LiteralPath (Join-Path $root 'projects.json') -PathType Leaf)) {
+        throw 'Existing-task import requires the installed service config and root projects.json.'
+    }
+    $validator = "const fs=require('node:fs');const folder=require(process.argv[1]);folder.validateManifest(JSON.parse(fs.readFileSync(process.argv[2],'utf8').replace(/^\uFEFF/,'')));"
+    & $config.nodePath -e $validator (Join-Path (Split-Path -Parent $PSScriptRoot) 'src\task-folder.js') $manifestPath
+    if ($LASTEXITCODE -ne 0) { throw 'Existing root projects.json failed service validation.' }
+    $manifest = Get-Content -LiteralPath $manifestPath -Raw | ConvertFrom-Json
 }
 if ($Apply -and (Get-Service -Name TaskFolderMcp -ErrorAction SilentlyContinue).Status -eq 'Running') {
     throw 'Stop the legacy TaskFolderMcp service before task migration.'
@@ -95,6 +111,16 @@ $years = @(Get-ChildItem -LiteralPath $tasks -Directory -Force)
 if (@($years | Where-Object Name -NotMatch '^\d{4}$').Count) { throw 'Unexpected directory directly under tasks.' }
 $taskFolders = @($years | ForEach-Object { Get-ChildItem -LiteralPath $_.FullName -Directory -Force })
 $nonstandard = @($taskFolders | Where-Object Name -NotMatch '^[A-Z][A-Z0-9_-]*-[1-9][0-9]*$')
+if ($ImportExisting) {
+    $registered = @($manifest.projects | ForEach-Object project_key)
+    $unregistered = @($taskFolders | Where-Object {
+        $_.Name -match '^([A-Z][A-Z0-9_-]*)-[1-9][0-9]*$' -and $Matches[1] -notin $registered
+    })
+    if ($unregistered.Count) {
+        $missingKeys = @($unregistered | ForEach-Object { [regex]::Match($_.Name, '^(.+)-[1-9][0-9]*$').Groups[1].Value } | Sort-Object -Unique)
+        Write-Output "UNREGISTERED: $($unregistered.Count) existing task folders; project keys: $($missingKeys -join ', '). Folders will be preserved; register projects later for MCP access."
+    }
+}
 Write-Output "READY: $($taskFolders.Count) task folders ($($nonstandard.Count) nonstandard); $($directories.Count) directories; $($files.Count) files"
 foreach ($folder in $nonstandard) { Write-Output "NONSTANDARD: $($folder.FullName)" }
 foreach ($path in $noncanonical) { Write-Output "NONCANONICAL ACL: $path" }
@@ -153,6 +179,7 @@ function Set-ParentAcl([string]$path) {
     }
     catch { throw "Parent ACL write failed for ${path}: $($_.Exception.Message)" }
 }
+$createdDirectories = [Collections.Generic.List[string]]::new()
 try {
     Set-ParentAcl $tasks
     foreach ($year in $years) { Set-ParentAcl $year.FullName }
@@ -160,7 +187,10 @@ try {
         if ($folder.Name -match '^[A-Z][A-Z0-9_-]*-[1-9][0-9]*$') {
             foreach ($name in @('.protected', '.protected\snapshots')) {
                 $path = Join-Path $folder.FullName $name
-                if (-not (Test-Path -LiteralPath $path)) { New-Item -ItemType Directory -Path $path | Out-Null }
+                if (-not (Test-Path -LiteralPath $path)) {
+                    New-Item -ItemType Directory -Path $path | Out-Null
+                    $createdDirectories.Add($path)
+                }
                 $item = Get-Item -LiteralPath $path -Force
                 if (-not $item.PSIsContainer -or ($item.Attributes -band [IO.FileAttributes]::ReparsePoint)) {
                     throw "Invalid protected task directory: $path"
@@ -209,6 +239,15 @@ try {
         } catch {
             $rollbackFailures += 1
             Write-Warning "ACL rollback failed: $($entry.path): $($_.Exception.Message)"
+        }
+    }
+    foreach ($path in @($createdDirectories | Sort-Object Length -Descending)) {
+        try {
+            if (@(Get-ChildItem -LiteralPath $path -Force).Count) { throw 'Directory is no longer empty.' }
+            Remove-Item -LiteralPath $path -Force
+        } catch {
+            $rollbackFailures += 1
+            Write-Warning "Created directory cleanup failed: $($path): $($_.Exception.Message)"
         }
     }
     if ($rollbackFailures) { throw "TASK_ACL_ROLLBACK_INCOMPLETE: $rollbackFailures paths; backup $backupPath. $failure" }
