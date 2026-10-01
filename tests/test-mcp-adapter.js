@@ -5,7 +5,7 @@ const fs = require('node:fs');
 const net = require('node:net');
 const path = require('node:path');
 const readline = require('node:readline');
-const { spawn } = require('node:child_process');
+const { spawn, spawnSync } = require('node:child_process');
 
 async function main() {
   const testRoot = path.join(__dirname, '..', '.runtime', 'tests', 'test-mcp-adapter');
@@ -60,9 +60,13 @@ async function main() {
   await new Promise((resolve) => server.listen(`\\\\.\\pipe\\${pipeName}`, resolve));
   const adapter = path.join(root, 'mcp-adapter.js');
   fs.copyFileSync(path.join(__dirname, '..', 'src', 'mcp-adapter.js'), adapter);
+  const missingClient = spawnSync(process.execPath, [adapter], { encoding: 'utf8' });
+  assert.notEqual(missingClient.status, 0);
+  assert.equal(missingClient.stdout, '');
+  assert.match(missingClient.stderr, /tracker-client\.json/);
   fs.writeFileSync(path.join(root, 'tracker-client.json'), JSON.stringify({ pipeName }));
   const child = spawn(process.execPath, [adapter], {
-    env: { ...process.env, TASK_FOLDER_MCP_PIPE: 'wrong-pipe' }, stdio: ['pipe', 'pipe', 'inherit']
+    stdio: ['pipe', 'pipe', 'inherit']
   });
   const output = readline.createInterface({ input: child.stdout });
   const pending = new Map();
@@ -118,7 +122,6 @@ async function main() {
   } finally {
     child.kill();
     await new Promise((resolve) => server.close(resolve));
-    fs.rmSync(root, { recursive: true, force: true });
   }
 }
 
