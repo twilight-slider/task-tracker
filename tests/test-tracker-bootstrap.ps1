@@ -1,5 +1,5 @@
 $ErrorActionPreference = 'Stop'
-$root = Join-Path (Split-Path -Parent $PSScriptRoot) ('.runtime\tests\test-tracker-bootstrap\run-' + $PID)
+$root = Join-Path (Split-Path -Parent $PSScriptRoot) ('.runtime\tests\test-tracker-bootstrap\run-' + [guid]::NewGuid().ToString('N'))
 New-Item -ItemType Directory -Path $root -Force | Out-Null
 $envPath = Join-Path $root 'env.txt'
 $configPath = Join-Path $root 'bootstrap.json'
