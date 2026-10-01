@@ -40,8 +40,11 @@ try {
         throw 'BOM-prefixed manifest was rejected.'
     }
     Set-Content -LiteralPath (Join-Path $tracker 'projects.json') -Value '{"schema_version":1,"projects":[{"project_key":"OTHER","source_type":"JIRA_CLOUD","jira_host":"https://jira.example.test"}]}'
-    try { & $script -ConfigPath $installed -ImportExisting | Out-Null; throw 'Unregistered task project was accepted.' }
-    catch { if ($_.Exception.Message -notmatch 'unregistered project keys') { throw } }
+    $unregisteredPlan = @(& $script -ConfigPath $installed -ImportExisting)
+    if (-not @($unregisteredPlan | Where-Object { $_ -match '^UNREGISTERED: 1 existing task folders; project keys: TEST\.' }).Count -or
+        -not @($unregisteredPlan | Where-Object { $_ -match '^READY:' }).Count) {
+        throw "Existing-task import did not preserve unregistered folders: $unregisteredPlan"
+    }
     Write-Output 'Task migration preflight passed'
 } finally {
     if (Test-Path -LiteralPath $testRoot) { Remove-Item -LiteralPath $testRoot -Recurse -Force }

@@ -117,7 +117,8 @@ if ($ImportExisting) {
         $_.Name -match '^([A-Z][A-Z0-9_-]*)-[1-9][0-9]*$' -and $Matches[1] -notin $registered
     })
     if ($unregistered.Count) {
-        throw "Existing tasks have unregistered project keys: $($unregistered.FullName -join ', ')"
+        $missingKeys = @($unregistered | ForEach-Object { [regex]::Match($_.Name, '^(.+)-[1-9][0-9]*$').Groups[1].Value } | Sort-Object -Unique)
+        Write-Output "UNREGISTERED: $($unregistered.Count) existing task folders; project keys: $($missingKeys -join ', '). Folders will be preserved; register projects later for MCP access."
     }
 }
 Write-Output "READY: $($taskFolders.Count) task folders ($($nonstandard.Count) nonstandard); $($directories.Count) directories; $($files.Count) files"
