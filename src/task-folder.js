@@ -42,10 +42,53 @@ function getConfig() {
       !path.isAbsolute(config.tasksRoot || '') || !path.isAbsolute(config.protectedRoot || '') ||
       config.tasksRoot !== path.join(config.trackerRoot, 'tasks') ||
       (config.pwshPath !== undefined &&
-        (typeof config.pwshPath !== 'string' || !path.isAbsolute(config.pwshPath)))) {
+        (typeof config.pwshPath !== 'string' || !path.isAbsolute(config.pwshPath))) ||
+      (config.snapshotRoots !== undefined && (!Array.isArray(config.snapshotRoots) ||
+        config.snapshotRoots.some((root) => typeof root !== 'string' || !path.isAbsolute(root))))) {
     throw new TaskFolderConfigError('Service config has invalid storage roots');
   }
   return config;
+}
+
+async function assertPlainPath(directory) {
+  const resolved = path.resolve(directory);
+  const volume = path.parse(resolved).root;
+  let current = volume;
+  for (const part of resolved.slice(volume.length).split(path.sep).filter(Boolean)) {
+    current = path.join(current, part);
+    let stat;
+    try { stat = await fs.lstat(current); }
+    catch (error) {
+      if (error.code === 'ENOENT') throw new TaskFolderError('PROJECT_NOT_FOUND', `Directory does not exist: ${current}`);
+      throw error;
+    }
+    if (!stat.isDirectory() || stat.isSymbolicLink()) {
+      throw new TaskFolderError('PROJECT_ROOT_FORBIDDEN', `Not a plain directory: ${current}`);
+    }
+  }
+  return fs.realpath(resolved);
+}
+
+async function assertSnapshotRoot(projectRoot) {
+  if (typeof projectRoot !== 'string' || !path.isAbsolute(projectRoot) || /[\r\n]/.test(projectRoot)) {
+    throw new TaskFolderError('PROJECT_ROOT_INVALID', 'project_root must be an absolute path');
+  }
+  const config = getConfig();
+  const root = await assertPlainPath(projectRoot);
+  const tracker = path.resolve(config.trackerRoot).toLowerCase();
+  const candidate = root.toLowerCase();
+  if (candidate === tracker || candidate.startsWith(`${tracker}${path.sep}`) || tracker.startsWith(`${candidate}${path.sep}`)) {
+    throw new TaskFolderError('PROJECT_ROOT_FORBIDDEN', 'Tracker storage cannot be snapshotted');
+  }
+  let allowed = false;
+  for (const entry of config.snapshotRoots || []) {
+    const base = (await assertPlainPath(entry)).toLowerCase();
+    if (candidate === base || candidate.startsWith(`${base}${path.sep}`)) allowed = true;
+  }
+  if (!allowed) throw new TaskFolderError('PROJECT_ROOT_FORBIDDEN', 'project_root is outside configured snapshot roots');
+  try { await fs.access(root, fsSync.constants.R_OK); }
+  catch { throw new TaskFolderError('PROJECT_ROOT_UNREADABLE', 'Service cannot read project_root'); }
+  return root;
 }
 
 async function getTasksFolder() {
@@ -374,7 +417,7 @@ async function resolveTaskFolder(key) {
 }
 
 module.exports = {
-  TaskFolderConfigError, TaskFolderError, createLocalTaskFolder, createTaskFolder, createTaskSubdirectory, getConfigPath,
+  TaskFolderConfigError, TaskFolderError, assertSnapshotRoot, createLocalTaskFolder, createTaskFolder, createTaskSubdirectory, getConfigPath,
   getTaskProjects, getTasksFolder, normalizeJiraHost, parseIssueKey, registerTaskProject,
   resolveTaskFolder, setTaskJiraHost, validateManifest
 };
