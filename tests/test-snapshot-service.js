@@ -95,6 +95,34 @@ fs.writeFileSync(file, Buffer.from('\ufeffone\r\ntwo\r\n'));
     const createdByWorker = worker('create_result_snapshot', { key: 'TEST-1', project_root: gitProject });
     assert.equal(createdByWorker.ok, true, JSON.stringify(createdByWorker));
     assert.equal(worker('get_result_snapshot', { key: 'TEST-1', snapshot_id: createdByWorker.data.snapshot_id }).data.project.mode, 'git');
+    const summary = worker('get_result_snapshot', { key: 'TEST-1',
+      snapshot_id: createdByWorker.data.snapshot_id, summary_only: true });
+    assert.equal(summary.ok, true, JSON.stringify(summary));
+    assert.equal(summary.data.snapshot_id, createdByWorker.data.snapshot_id);
+    assert.equal(summary.data.fingerprint.value, createdByWorker.data.fingerprint.value);
+    assert.equal(summary.data.files_count, 2);
+    assert.equal(Object.hasOwn(summary.data, 'files'), false);
+    assert.equal(worker('get_result_snapshot', { key: 'TEST-1',
+      snapshot_id: createdByWorker.data.snapshot_id, summary_only: 'true' }).code, 'INVALID_REQUEST');
+    const largeId = 'rs_00000000-0000-0000-0000-000000000002';
+    const largeFiles = Array.from({ length: 9000 }, (_, index) => ({
+      path: `file-${String(index).padStart(5, '0')}.txt`, kind: 'text', sha256: 'a'.repeat(64)
+    }));
+    const largeFingerprint = createHash('sha256').update(JSON.stringify([
+      'result-snapshot-v2', largeFiles.map((entry) => [entry.path, entry.kind, entry.sha256])
+    ])).digest('hex');
+    fs.writeFileSync(path.join(taskFolder, '.protected', 'snapshots', `${largeId}.json`), JSON.stringify({
+      schema_version: 2, snapshot_id: largeId, algorithm_version: 'result-snapshot-v2',
+      fingerprint: { algorithm: 'sha256', value: largeFingerprint },
+      project: { root: gitProject, mode: 'git' }, files_count: largeFiles.length,
+      files: largeFiles, created_at: new Date().toISOString()
+    }));
+    assert.equal(worker('get_result_snapshot', { key: 'TEST-1', snapshot_id: largeId }).code, 'SNAPSHOT_TOO_LARGE');
+    const compactLarge = worker('get_result_snapshot', { key: 'TEST-1', snapshot_id: largeId, summary_only: true });
+    assert.equal(compactLarge.ok, true, JSON.stringify(compactLarge));
+    assert.equal(compactLarge.data.files_count, largeFiles.length);
+    assert.equal(compactLarge.data.fingerprint.value, largeFingerprint);
+    assert.equal(Object.hasOwn(compactLarge.data, 'files'), false);
     assert.equal(worker('compare_result_snapshot', { key: 'TEST-1', snapshot_id: createdByWorker.data.snapshot_id }).data.status, 'current');
     assert.equal(worker('create_result_snapshot', { key: 'TEST-1', project_root: project }).code, 'PROJECT_ROOT_FORBIDDEN');
     assert.equal(worker('get_result_snapshot', { key: 'TEST-2', snapshot_id: createdByWorker.data.snapshot_id }).ok, false);

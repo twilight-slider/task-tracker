@@ -18,10 +18,13 @@ try {
       env: { ...process.env, ...(scope ? { TASK_TRACKER_MCP_SCOPE: scope } : {}) }
     });
     assert.equal(child.status, 0, child.stderr);
-    return JSON.parse(child.stdout.trim()).result.tools.map((tool) => tool.name);
+    return JSON.parse(child.stdout.trim()).result.tools;
   };
-  assert.deepEqual(list('snapshots'), ['create_result_snapshot', 'get_result_snapshot', 'compare_result_snapshot']);
-  assert.equal(list().includes('create_result_snapshot'), false);
+  const snapshotTools = list('snapshots');
+  assert.deepEqual(snapshotTools.map((tool) => tool.name),
+    ['create_result_snapshot', 'get_result_snapshot', 'compare_result_snapshot']);
+  assert.equal(snapshotTools[1].inputSchema.properties.summary_only.type, 'boolean');
+  assert.equal(list().some((tool) => tool.name === 'create_result_snapshot'), false);
   console.log('snapshot adapter checks passed');
 } finally {
   fs.rmSync(root, { recursive: true, force: true });

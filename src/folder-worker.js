@@ -53,7 +53,16 @@ const methods = {
     return { status: 'ok', snapshot_id: snapshot.snapshot_id, fingerprint: snapshot.fingerprint,
       files_count: snapshot.files_count, mode: snapshot.project.mode };
   },
-  get_result_snapshot: async ({ key, snapshot_id: id }) => bounded(await snapshots.getSnapshot(await snapshotTask(key), id)),
+  get_result_snapshot: async ({ key, snapshot_id: id, summary_only: summaryOnly }) => {
+    if (summaryOnly !== undefined && typeof summaryOnly !== 'boolean') {
+      throw new folder.TaskFolderError('INVALID_REQUEST', 'summary_only must be a boolean');
+    }
+    const snapshot = await snapshots.getSnapshot(await snapshotTask(key), id);
+    if (!summaryOnly) return bounded(snapshot);
+    return bounded({ snapshot_id: snapshot.snapshot_id, project: snapshot.project,
+      fingerprint: snapshot.fingerprint, files_count: snapshot.files_count,
+      algorithm_version: snapshot.algorithm_version });
+  },
   compare_result_snapshot: async ({ key, snapshot_id: id }) => bounded(await snapshots.compareSnapshot(
     await snapshotTask(key), id, folder.assertSnapshotRoot))
 };

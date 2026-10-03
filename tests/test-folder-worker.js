@@ -41,6 +41,7 @@ try {
   assert.equal(call('create_local_task_folder', input).data.key, 'TEST-2');
   assert.equal(fs.existsSync(path.join(first.data.taskFolder, 'input', 'materials')), true, 'service must create ordinary folders');
   assert.equal(fs.existsSync(path.join(first.data.taskFolder, '.protected', 'snapshots')), true);
+  assert.equal(fs.existsSync(path.join(first.data.taskFolder, 'ai_actions', 'result-snapshots')), false);
   const aclCommand = '$ErrorActionPreference="Stop";$p=$env:A60_ACL_PATH;$sid=[Security.Principal.SecurityIdentifier]"S-1-5-32-545";' +
     '$a=Get-Acl -LiteralPath $p;' +
     '$a.Access | Where-Object { $_.IdentityReference.Translate([Security.Principal.SecurityIdentifier]).Value -eq $sid.Value } | ' +
@@ -59,15 +60,28 @@ try {
     ['-NoProfile', '-Command', aclCommand], { encoding: 'utf8', env: { ...process.env, A60_ACL_PATH: ordinaryFile } });
   assert.match(fileAcl, /FullControl/);
   execFileSync('icacls.exe', [first.data.taskFolder, '/grant', '*S-1-5-32-545:(F)']);
-  assert.equal(call('create_task_subdirectory', { key: 'TEST-1', relative_path: 'input' }).ok, true);
+  assert.equal(call('create_task_subdirectory', { key: 'TEST-1', relative_path: 'input/materials' }).ok, true);
   const repairedAcl = execFileSync('C:\\Program Files\\PowerShell\\7\\pwsh.exe',
     ['-NoProfile', '-Command', aclCommand], { encoding: 'utf8', env: { ...process.env, A60_ACL_PATH: first.data.taskFolder } });
   const effectiveRules = JSON.parse(repairedAcl).filter((rule) => rule.propagate !== 'InheritOnly');
   assert.equal(effectiveRules.length, 1);
   assert.doesNotMatch(effectiveRules[0].rights, /FullControl|CreateDirectories|DeleteSubdirectoriesAndFiles|ChangePermissions|TakeOwnership/);
-  const extra = call('create_task_subdirectory', { key: 'TEST-1', relative_path: 'reports/2026' });
+  assert.equal(call('create_task_subdirectory', { key: 'TEST-1', relative_path: 'update/reports' }).ok, true);
+  const extra = call('create_task_subdirectory', { key: 'TEST-1', relative_path: 'update/reports/2026' });
   assert.equal(extra.ok, true, JSON.stringify(extra));
-  assert.equal(fs.existsSync(path.join(first.data.taskFolder, 'reports', '2026')), true);
+  assert.equal(fs.existsSync(path.join(first.data.taskFolder, 'update', 'reports', '2026')), true);
+  for (const forbidden of ['reports', 'ai_actions/result-snapshots', 'ai_actions/nested/file',
+    '.protected/snapshots/extra', 'update/missing/child']) {
+    assert.equal(call('create_task_subdirectory', { key: 'TEST-1', relative_path: forbidden }).ok, false, forbidden);
+  }
+  assert.equal(fs.existsSync(path.join(first.data.taskFolder, 'reports')), false);
+  assert.equal(fs.existsSync(path.join(first.data.taskFolder, 'update', 'missing')), false);
+  const outside = path.join(root, 'outside');
+  fs.mkdirSync(outside);
+  fs.symlinkSync(outside, path.join(first.data.taskFolder, 'update', 'link'), 'junction');
+  assert.equal(call('create_task_subdirectory', { key: 'TEST-1', relative_path: 'update/link/escape' }).code,
+    'TASK_PATH_INVALID');
+  assert.equal(fs.existsSync(path.join(outside, 'escape')), false);
   assert.equal(call('create_task_subdirectory', { key: 'TEST-1', relative_path: '../escape' }).code, 'TASK_PATH_INVALID');
   assert.equal(call('create_task_subdirectory', { key: 'TEST-1', relative_path: '.protected/escape' }).code, 'TASK_PATH_INVALID');
   assert.equal(call('create_local_task_folder', input).data.key, 'TEST-3');
@@ -77,6 +91,7 @@ try {
   assert.equal(jira.data.jiraHost, 'https://jira.example.test');
   assert.equal(fs.existsSync(path.join(jira.data.taskFolder, 'origin')), true, 'service must create Jira folders');
   assert.equal(fs.existsSync(path.join(jira.data.taskFolder, '.protected', 'snapshots')), true);
+  assert.equal(fs.existsSync(path.join(jira.data.taskFolder, 'ai_actions', 'result-snapshots')), false);
   assert.equal(call('unknown', {}).code, 'INVALID_REQUEST');
   console.log('folder worker tests passed');
 } finally {

@@ -32,7 +32,7 @@ const snapshotTools = [
     key: { type: 'string' }, project_root: { type: 'string' }
   }, required: ['key', 'project_root'], additionalProperties: false } },
   { name: 'get_result_snapshot', inputSchema: { type: 'object', properties: {
-    key: { type: 'string' }, snapshot_id: { type: 'string' }
+    key: { type: 'string' }, snapshot_id: { type: 'string' }, summary_only: { type: 'boolean' }
   }, required: ['key', 'snapshot_id'], additionalProperties: false } },
   { name: 'compare_result_snapshot', inputSchema: { type: 'object', properties: {
     key: { type: 'string' }, snapshot_id: { type: 'string' }

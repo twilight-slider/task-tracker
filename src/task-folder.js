@@ -366,7 +366,8 @@ async function createTaskSubdirectory({ key, relative_path: relativePath }) {
     throw new TaskFolderError('TASK_PATH_INVALID', 'relative_path must be a short relative directory path');
   }
   const parts = relativePath.split(/[\\/]/);
-  if (!parts.length || parts.some((part) => !/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(part) ||
+  if (parts.length < 2 || ['.protected', 'ai_actions'].includes(parts[0].toLowerCase()) ||
+      parts.some((part) => !/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(part) ||
       part.endsWith('.') || part.toLowerCase() === '.protected' ||
       /^(CON|PRN|AUX|NUL|COM[1-9]|LPT[1-9])(?:\.|$)/i.test(part))) {
     throw new TaskFolderError('TASK_PATH_INVALID', 'relative_path contains a forbidden component');
@@ -380,13 +381,18 @@ async function createTaskSubdirectory({ key, relative_path: relativePath }) {
   if (matches.length !== 1) throw new TaskFolderError('TASK_PATH_INVALID', `Task ${key} must exist in one year`);
   const taskFolder = matches[0].taskFolder;
   await plainDirectory(taskFolder);
-  const finalPath = path.join(taskFolder, ...parts);
-  const existed = await isDirectory(finalPath);
-  let directory = taskFolder;
-  for (const part of parts) {
-    directory = path.join(directory, part);
-    await plainDirectory(directory, true);
+  let parent = taskFolder;
+  for (const part of parts.slice(0, -1)) {
+    parent = path.join(parent, part);
+    try { await plainDirectory(parent); }
+    catch (error) {
+      if (error.code === 'ENOENT') throw new TaskFolderError('TASK_PATH_INVALID', `Parent directory does not exist: ${parent}`);
+      throw error;
+    }
   }
+  const directory = path.join(parent, parts.at(-1));
+  const existed = await isDirectory(directory);
+  await plainDirectory(directory, true);
   secureTaskFolders(taskFolder);
   return { key, taskFolder, directory, status: existed ? 'already_exists' : 'created' };
 }
