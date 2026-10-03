@@ -5,7 +5,8 @@ param(
     [switch]$ApplyAcl,
     [switch]$ImportExisting,
     [switch]$ApplyImport,
-    [switch]$MigrateTasks
+    [switch]$MigrateTasks,
+    [string[]]$SnapshotRoots
 )
 
 $ErrorActionPreference = 'Stop'
@@ -77,6 +78,16 @@ if ($service -and -not $elevated -and ($ValidateOnly -or $ImportExisting)) {
 }
 $installedConfig = Join-Path $root '.protected\service.json'
 $exe = Join-Path $root '.protected\bin\TaskTrackerService.exe'
+$snapshotRootsToInstall = if ($PSBoundParameters.ContainsKey('SnapshotRoots')) { @($SnapshotRoots) }
+elseif (Test-Path -LiteralPath $installedConfig) { @((Get-Content -LiteralPath $installedConfig -Raw | ConvertFrom-Json).snapshotRoots) | Where-Object { $_ } }
+else { @() }
+foreach ($snapshotRoot in $snapshotRootsToInstall) {
+    if (-not [IO.Path]::IsPathFullyQualified($snapshotRoot)) { throw "Snapshot root must be absolute: $snapshotRoot" }
+    $item = Get-Item -LiteralPath $snapshotRoot -Force -ErrorAction Stop
+    if (-not $item.PSIsContainer -or ($item.Attributes -band [IO.FileAttributes]::ReparsePoint)) {
+        throw "Snapshot root must be a plain directory: $snapshotRoot"
+    }
+}
 
 # Only principals with administrative control may own or alter a path used by the service.
 $trustedSids = @('S-1-5-18', 'S-1-5-32-544', 'S-1-5-80-956008885-3418522649-1831038044-1853292631-2271478464')
@@ -372,10 +383,10 @@ $repo = Split-Path -Parent $PSScriptRoot
 if ($service -and $service.Status -eq 'Running') { Stop-Service -Name $request.serviceName -ErrorAction Stop }
 & $csc /nologo /target:exe "/out:$exe" /reference:System.ServiceProcess.dll /reference:System.Web.Extensions.dll (Join-Path $repo 'src\ServiceHost.cs')
 if ($LASTEXITCODE -ne 0) { throw 'Service host compilation failed.' }
-foreach ($name in @('folder-worker.js', 'task-folder.js', 'Set-TaskDirectoryAcl.ps1')) {
+foreach ($name in @('folder-worker.js', 'task-folder.js', 'result-snapshot-store.js', 'Set-TaskDirectoryAcl.ps1')) {
     Copy-Item -LiteralPath (Join-Path $repo "src\$name") -Destination $request.installRoot -Force
 }
-foreach ($name in @('TaskTrackerService.exe', 'folder-worker.js', 'task-folder.js', 'Set-TaskDirectoryAcl.ps1')) { Set-FileRights (Join-Path $request.installRoot $name) $false }
+foreach ($name in @('TaskTrackerService.exe', 'folder-worker.js', 'task-folder.js', 'result-snapshot-store.js', 'Set-TaskDirectoryAcl.ps1')) { Set-FileRights (Join-Path $request.installRoot $name) $false }
 Copy-Item -LiteralPath (Join-Path $repo 'src\mcp-adapter.js') -Destination $root -Force
 Set-FileRights (Join-Path $root 'mcp-adapter.js') $true
 $clientConfig = Join-Path $root 'tracker-client.json'
@@ -391,6 +402,7 @@ $config = [ordered]@{
     serviceAccountSid = $serviceSid.Value; agentSid = $agentSid.Value; pipeName = $request.pipeName
     nodePath = $nodePath; pwshPath = $pwshPath; tasksRoot = $request.tasksRoot
     protectedRoot = $request.protectedRoot; installRoot = $request.installRoot
+    snapshotRoots = @($snapshotRootsToInstall | Where-Object { $_ })
 }
 [IO.File]::WriteAllText($installedConfig, (($config | ConvertTo-Json -Depth 3) + "`n"), [Text.UTF8Encoding]::new($false))
 Set-FileRights $installedConfig $false

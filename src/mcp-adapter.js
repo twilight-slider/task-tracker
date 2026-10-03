@@ -9,7 +9,7 @@ const path = require('node:path');
 const pipeName = JSON.parse(fsSync.readFileSync(path.join(__dirname, 'tracker-client.json'), 'utf8')).pipeName;
 if (!/^[a-z0-9-]+$/.test(pipeName)) throw new Error('Invalid installed Tracker pipe name');
 const pipe = `\\\\.\\pipe\\${pipeName}`;
-const tools = [
+const folderTools = [
   { name: 'get_tasks_folder', inputSchema: { type: 'object', properties: {}, additionalProperties: false } },
   { name: 'get_task_projects', inputSchema: { type: 'object', properties: {}, additionalProperties: false } },
   { name: 'create_task_folder', inputSchema: { type: 'object', properties: { key: { type: 'string' } }, required: ['key'], additionalProperties: false } },
@@ -27,6 +27,19 @@ const tools = [
     key: { type: 'string' }, relative_path: { type: 'string' }
   }, required: ['key', 'relative_path'], additionalProperties: false } }
 ];
+const snapshotTools = [
+  { name: 'create_result_snapshot', inputSchema: { type: 'object', properties: {
+    key: { type: 'string' }, project_root: { type: 'string' }
+  }, required: ['key', 'project_root'], additionalProperties: false } },
+  { name: 'get_result_snapshot', inputSchema: { type: 'object', properties: {
+    key: { type: 'string' }, snapshot_id: { type: 'string' }
+  }, required: ['key', 'snapshot_id'], additionalProperties: false } },
+  { name: 'compare_result_snapshot', inputSchema: { type: 'object', properties: {
+    key: { type: 'string' }, snapshot_id: { type: 'string' }
+  }, required: ['key', 'snapshot_id'], additionalProperties: false } }
+];
+const snapshotScope = process.env.TASK_TRACKER_MCP_SCOPE === 'snapshots';
+const tools = snapshotScope ? snapshotTools : folderTools;
 const allowed = new Set(tools.map((tool) => tool.name));
 
 function callOnce(method, args) {
@@ -147,7 +160,7 @@ async function callTool(method, args) {
 }
 
 async function handle(request) {
-  if (request.method === 'initialize') return { protocolVersion: request.params?.protocolVersion || '2024-11-05', capabilities: { tools: {} }, serverInfo: { name: 'task-folder-mcp', version: '0.1.0' } };
+  if (request.method === 'initialize') return { protocolVersion: request.params?.protocolVersion || '2024-11-05', capabilities: { tools: {} }, serverInfo: { name: snapshotScope ? 'task-tracker-mcp' : 'task-folder-mcp', version: '0.1.0' } };
   if (request.method === 'tools/list') return { tools };
   if (request.method !== 'tools/call') return undefined;
   const method = request.params?.name;
