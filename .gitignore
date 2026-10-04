@@ -152,7 +152,10 @@ activemq-data/
 # Environments
 .env
 .envrc
-.venv
+# Keep the venv setup files in Git; ignore the generated environment.
+/.venv/*
+!/.venv/setup_venv.ps1
+!/.venv/python_version.txt
 env/
 venv/
 ENV/
