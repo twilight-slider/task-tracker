@@ -104,6 +104,7 @@ $reuseExe = Test-TrackerHostReuse -PriorConfig $prior -SourceHash $hostHash -Exi
 $createdAccount = $false
 $createdService = $false
 $bootstrapUpdated = $false
+$pluginUpdateStarted = $false
 $wasRunning = $service -and $service.Status -eq 'Running'
 $switched = $false
 $preserveBackup = $false
@@ -130,6 +131,7 @@ function Set-TrackerDirectoryAcl([string]$Path, [Security.Principal.SecurityIden
     Remember-TrackerAcl $Path
     $acl = Get-Acl -LiteralPath $Path
     $acl.SetAccessRuleProtection($true, $false)
+    if (-not $IsRoot) { $acl.SetOwner($ServiceSid) }
     foreach ($rule in @($acl.Access)) { $acl.RemoveAccessRuleSpecific($rule) }
     foreach ($sidValue in @('S-1-5-18', 'S-1-5-32-544', $ServiceSid.Value)) {
         $acl.AddAccessRule([Security.AccessControl.FileSystemAccessRule]::new(
@@ -228,7 +230,10 @@ try {
     $tasks = Join-Path $settings.TrackerRoot 'tasks'
     foreach ($dir in @($tasks, (Join-Path $protected 'state'), (Join-Path $protected 'logs'))) {
         Remember-TrackerAcl $dir
-        if (-not (Test-Path -LiteralPath $dir)) { New-Item -ItemType Directory -Path $dir | Out-Null }
+        if (-not (Test-Path -LiteralPath $dir)) {
+            New-Item -ItemType Directory -Path $dir | Out-Null
+            $aclBefore[$dir] = Get-Acl -LiteralPath $dir
+        }
         Assert-PlainDirectory $dir | Out-Null
         Grant-TrackerRight -Path $dir -Sid $sid -Rights 'FullControl'
     }
@@ -279,66 +284,7 @@ try {
             Move-Item -LiteralPath $tempBootstrap -Destination $ConfigPath -Force
         } finally { if (Test-Path -LiteralPath $tempBootstrap) { Remove-Item -LiteralPath $tempBootstrap } }
     }
-    $preserveBackup = $true
-} catch {
-    $failure = $_.Exception.Message
-    if ($tokenSyncAttempted) {
-        try {
-            Restore-TrackerTokenPair -State $tokenRollback
-        } catch {
-            $preserveBackup = $true
-            throw "RECOVERY_INCOMPLETE: installation failed ($failure); MCP token rollback failed: $($_.Exception.Message)"
-        }
-    }
-    if ($switched) {
-        try {
-            $active = Get-Service -Name $serviceName -ErrorAction SilentlyContinue
-            if ($active -and $active.Status -eq 'Running') { Stop-Service -Name $serviceName -ErrorAction Stop }
-            if (-not $service -and (Get-Service -Name $serviceName -ErrorAction SilentlyContinue)) {
-                & sc.exe delete $serviceName | Out-Null
-                if ($LASTEXITCODE -ne 0) { throw 'SCM failed to delete newly created service.' }
-                $deadline = [DateTime]::UtcNow.AddSeconds(15)
-                while (Get-Service -Name $serviceName -ErrorAction SilentlyContinue) {
-                    if ([DateTime]::UtcNow -ge $deadline) { throw 'Newly created service is still registered after delete.' }
-                    Start-Sleep -Milliseconds 200
-                }
-            }
-            Restore-TrackerInstallLayout -ProtectedRoot $protected -BackupRoot $backup -HadLive $hadLive -OldConfig $oldConfig
-            if ($wasRunning) { Start-Service -Name $serviceName -ErrorAction Stop }
-        } catch {
-            $preserveBackup = $true
-            throw "RECOVERY_INCOMPLETE: installation failed ($failure); rollback failed: $($_.Exception.Message)"
-        }
-    }
-    if ($createdAccount) {
-        try { Remove-LocalUser -Name ([string]$request.serviceAccountName) -ErrorAction Stop }
-        catch {
-            $preserveBackup = $true
-            throw "RECOVERY_INCOMPLETE: installation failed ($failure); newly created service account remains: $($_.Exception.Message)"
-        }
-    }
-    if ($bootstrapUpdated) {
-        try { [IO.File]::WriteAllText($ConfigPath, $bootstrapOriginal, [Text.UTF8Encoding]::new($false)) }
-        catch {
-            $preserveBackup = $true
-            throw "RECOVERY_INCOMPLETE: installation failed ($failure); bootstrap JSON rollback failed"
-        }
-    }
-    foreach ($path in @($aclBefore.Keys) | Sort-Object Length -Descending) {
-        if ($aclBefore[$path] -and (Test-Path -LiteralPath $path)) {
-            try { Set-Acl -LiteralPath $path -AclObject $aclBefore[$path] }
-            catch {
-                $preserveBackup = $true
-                throw "RECOVERY_INCOMPLETE: installation failed ($failure); ACL rollback failed at $path"
-            }
-        }
-    }
-    throw "Installation failed; previous service restored where present: $failure"
-} finally {
-    Remove-TrackerInstallTree -ProtectedRoot $protected -Path $stage
-    if (-not $preserveBackup) { Remove-TrackerInstallTree -ProtectedRoot $protected -Path $backup }
-}
-try {
+    $pluginUpdateStarted = $true
     $targetScript = Join-Path $repository 'scripts\Update-TaskTrackerMarketplace.ps1'
     $currentSid = [Security.Principal.WindowsIdentity]::GetCurrent().User.Value
     if ($currentSid -ceq $settings.TargetSid) {
@@ -359,10 +305,6 @@ try {
             }
         }
     }
-} catch {
-    throw "PLUGIN_UPDATE_INCOMPLETE: new service is running and rollback files are retained at $backup; $($_.Exception.Message)"
-}
-try {
     $instructions = Join-Path $tasks 'AGENTS.md'
     if (-not (Test-Path -LiteralPath $instructions)) {
         $source = Join-Path $settings.TrackerRoot 'AGENTS.md'
@@ -385,7 +327,60 @@ try {
     $unexpected = @(Get-ChildItem -LiteralPath $settings.TrackerRoot -File -Force |
         Where-Object Name -ne 'projects.json' | Select-Object -ExpandProperty Name)
     if ($unexpected.Count) { throw "Unexpected Tracker root files remain: $($unexpected -join ', ')" }
+    $preserveBackup = $true
 } catch {
-    throw "ROOT_CLEANUP_INCOMPLETE: new service is running; $($_.Exception.Message)"
+    $failure = $_.Exception.Message
+    $tokenRollbackFailure = $null
+    if ($tokenSyncAttempted) {
+        try {
+            Restore-TrackerTokenPair -State $tokenRollback
+        } catch {
+            $preserveBackup = $true
+            $tokenRollbackFailure = $_.Exception.Message
+        }
+    }
+    if ($switched) {
+        try {
+            Restore-TrackerServiceInstall -ServiceName $serviceName -ProtectedRoot $protected -BackupRoot $backup `
+                -HadLive $hadLive -OldConfig $oldConfig -ServiceExisted ([bool]$service) -WasRunning ([bool]$wasRunning)
+        } catch {
+            $preserveBackup = $true
+            throw "RECOVERY_INCOMPLETE: installation failed ($failure); rollback failed: $($_.Exception.Message)"
+        }
+    }
+    if ($bootstrapUpdated) {
+        try { [IO.File]::WriteAllText($ConfigPath, $bootstrapOriginal, [Text.UTF8Encoding]::new($false)) }
+        catch {
+            $preserveBackup = $true
+            throw "RECOVERY_INCOMPLETE: installation failed ($failure); bootstrap JSON rollback failed"
+        }
+    }
+    foreach ($path in @($aclBefore.Keys) | Sort-Object Length -Descending) {
+        if ($aclBefore[$path] -and (Test-Path -LiteralPath $path)) {
+            try { Set-Acl -LiteralPath $path -AclObject $aclBefore[$path] }
+            catch {
+                $preserveBackup = $true
+                throw "RECOVERY_INCOMPLETE: installation failed ($failure); ACL rollback failed at $path"
+            }
+        }
+    }
+    if ($createdAccount) {
+        try { Remove-LocalUser -Name ([string]$request.serviceAccountName) -ErrorAction Stop }
+        catch {
+            $preserveBackup = $true
+            throw "RECOVERY_INCOMPLETE: installation failed ($failure); newly created service account remains: $($_.Exception.Message)"
+        }
+    }
+    if ($tokenRollbackFailure) {
+        throw "RECOVERY_INCOMPLETE: installation failed ($failure); previous service restored where present, but MCP token rollback failed: $tokenRollbackFailure"
+    }
+    if ($pluginUpdateStarted) {
+        $preserveBackup = $true
+        throw "RECOVERY_INCOMPLETE: installation failed ($failure); previous service restored where present, but TargetUser plugin state may have changed. Rollback files retained at $backup"
+    }
+    throw "Installation failed; previous service restored where present: $failure"
+} finally {
+    Remove-TrackerInstallTree -ProtectedRoot $protected -Path $stage
+    if (-not $preserveBackup) { Remove-TrackerInstallTree -ProtectedRoot $protected -Path $backup }
 }
 Write-Output "Installed: $serviceName; EXE reused: $reuseExe; Python runtime: $($request.runtimeRoot); plugins updated; rollback retained: $backup"
