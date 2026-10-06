@@ -1,0 +1,13 @@
+{
+  "schema_version": 1,
+  "python": {
+    "version": "3.11.9",
+    "file": "python-3.11.9-embed-amd64.zip",
+    "sha256": "009D6BF7E3B2DDCA3D784FA09F90FE54336D5B60F0E0F305C37F400BF83CFD3B"
+  },
+  "pyyaml": {
+    "version": "6.0.3",
+    "file": "pyyaml-6.0.3-cp311-cp311-win_amd64.whl",
+    "sha256": "9F3BFB4965EB874431221A3FF3FDCDDC7E74E3B07799E0E84CA4A0F867D449BF"
+  }
+}
