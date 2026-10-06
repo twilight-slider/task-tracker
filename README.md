@@ -88,5 +88,5 @@ pwsh -NoProfile -File .\bootstrap.ps1 -TargetUser 'DOMAIN\User'
 | `Service did not reach Running/Automatic`; `Installed MCP did not accept the configured token` | Проверить журнал службы, её учётную запись, порт и обе копии токена; установщик попытается вернуть прежнюю версию. |
 | `Installation failed; previous service restored`; `MCP token update rolled back` | Исправить исходную причину после двоеточия и повторить; прежнее состояние восстановлено. |
 | `RECOVERY_INCOMPLETE`; `SCM failed to delete`; `newly created service is still registered`; `Refusing to remove a path outside protected Tracker` | Не запускать повторную установку вслепую. Сохранить каталог `.rollback-*`, проверить пути, службу, токен, ACL и учётную запись вручную под администратором. |
-| `PLUGIN_UPDATE_INCOMPLETE` | Служба уже работает; сохранить `.rollback-*`, исправить доступ к Codex/marketplace и повторить обновление плагинов без ручной правки кэша. |
-| `ROOT_CLEANUP_INCOMPLETE`; `Unexpected Tracker root files remain` | Служба уже работает; проверить перечисленные файлы в корне. Установщик удаляет только известные старые файлы, неизвестные данные сохраняет. |
+| `RECOVERY_INCOMPLETE` после обновления плагинов | Установщик возвращает прежнюю службу, но состояние плагинов могло измениться. Сохранить `.rollback-*`, сверить оба плагина и их доступ к MCP перед повторной установкой. |
+| `Unexpected Tracker root files remain` | Установщик возвращает прежнюю службу; проверить перечисленные файлы в корне. Он удаляет только известные старые файлы, неизвестные данные сохраняет. |

@@ -73,3 +73,22 @@ function Restore-TrackerInstallLayout([string]$ProtectedRoot, [string]$BackupRoo
         Remove-Item -LiteralPath $configPath
     }
 }
+
+function Restore-TrackerServiceInstall([string]$ServiceName, [string]$ProtectedRoot,
+    [string]$BackupRoot, [hashtable]$HadLive, $OldConfig,
+    [bool]$ServiceExisted, [bool]$WasRunning) {
+    $active = Get-Service -Name $ServiceName -ErrorAction SilentlyContinue
+    if ($active -and $active.Status -eq 'Running') { Stop-Service -Name $ServiceName -ErrorAction Stop }
+    if (-not $ServiceExisted -and (Get-Service -Name $ServiceName -ErrorAction SilentlyContinue)) {
+        & sc.exe delete $ServiceName | Out-Null
+        if ($LASTEXITCODE -ne 0) { throw 'SCM failed to delete newly created service.' }
+        $deadline = [DateTime]::UtcNow.AddSeconds(15)
+        while (Get-Service -Name $ServiceName -ErrorAction SilentlyContinue) {
+            if ([DateTime]::UtcNow -ge $deadline) { throw 'Newly created service is still registered after delete.' }
+            Start-Sleep -Milliseconds 200
+        }
+    }
+    Restore-TrackerInstallLayout -ProtectedRoot $ProtectedRoot -BackupRoot $BackupRoot `
+        -HadLive $HadLive -OldConfig $OldConfig
+    if ($WasRunning) { Start-Service -Name $ServiceName -ErrorAction Stop }
+}
