@@ -10,7 +10,8 @@ if ([string]$bootstrap.ownerSid -match '^S-1-5-21-(?:[0-9]+-){3}[0-9]+$' -and
     [string]$bootstrap.serviceName -ceq ('TaskTracker-' + ([string]$bootstrap.ownerSid).Split('-')[-1])) {
     $service = Get-CimInstance Win32_Service -Filter "Name='$($bootstrap.serviceName)'" -ErrorAction Stop
     if ($service) {
-        $trusted += ([Security.Principal.NTAccount]$service.StartName).Translate([Security.Principal.SecurityIdentifier]).Value
+        $accountName = ([string]$service.StartName) -replace '^\.(?=\\)', [Environment]::MachineName
+        $trusted += ([Security.Principal.NTAccount]$accountName).Translate([Security.Principal.SecurityIdentifier]).Value
     }
 } else { throw 'Protected bootstrap identity is invalid.' }
 $supportItem = Get-Item -LiteralPath $support -Force -ErrorAction Stop
