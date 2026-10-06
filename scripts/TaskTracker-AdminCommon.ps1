@@ -126,7 +126,8 @@ function Get-InstalledTrackerServiceSid([string]$TargetSid) {
     $serviceName = "TaskTracker-$rid"
     $service = Get-CimInstance Win32_Service -Filter "Name='$serviceName'" -ErrorAction Stop
     if (-not $service) { return $null }
-    try { return ([Security.Principal.NTAccount]$service.StartName).Translate([Security.Principal.SecurityIdentifier]).Value }
+    $accountName = ([string]$service.StartName) -replace '^\.(?=\\)', [Environment]::MachineName
+    try { return ([Security.Principal.NTAccount]$accountName).Translate([Security.Principal.SecurityIdentifier]).Value }
     catch { throw "Cannot resolve installed service account for $serviceName." }
 }
 

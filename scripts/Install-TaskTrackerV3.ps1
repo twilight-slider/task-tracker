@@ -70,8 +70,9 @@ foreach ($path in @((Join-Path $settings.TrackerRoot 'projects.json'), $exe, $se
 }
 if ($service) {
     $scm = Get-CimInstance Win32_Service -Filter "Name='$serviceName'" -ErrorAction Stop
+    $accountName = ([string]$scm.StartName) -replace '^\.(?=\\)', [Environment]::MachineName
     if ([string]$scm.PathName -ine "`"$exe`" --config `"$serviceConfig`"" -or
-        ([Security.Principal.NTAccount]$scm.StartName).Translate([Security.Principal.SecurityIdentifier]).Value -cne $installedSid) {
+        ([Security.Principal.NTAccount]$accountName).Translate([Security.Principal.SecurityIdentifier]).Value -cne $installedSid) {
         throw 'Existing service binding differs from expected executable/config/account.'
     }
     if (-not (Test-Path -LiteralPath $serviceConfig -PathType Leaf)) { throw 'Existing service.json is missing.' }
