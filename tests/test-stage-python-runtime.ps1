@@ -45,6 +45,19 @@ $tracker = Join-Path $base 'Tracker'
 $reply = '{"method":"get_tasks_folder","arguments":{}}' | & $python -I (Join-Path $bin 'folder_worker.py') $config
 if ($LASTEXITCODE -ne 0 -or -not (($reply | ConvertFrom-Json).ok)) { throw "Protected-style worker import failed: $reply" }
 
+$installed = (& py.exe -0p) -join "`n"
+if ($installed -notmatch '(?m)^\s*-V:3\.12(?:\s|$)') {
+    $missingVersionFile = Join-Path $base 'missing-python-version.txt'
+    [IO.File]::WriteAllText($missingVersionFile, "python3.12`n")
+    $missingRuntime = Join-Path $base 'missing-version-runtime'
+    $rejected = $false
+    try { & $script -RuntimeRoot $missingRuntime -VersionFile $missingVersionFile | Out-Null }
+    catch { $rejected = $_.Exception.Message -like '*Python 3.12 is unavailable*Install it or change*Python 3.11 is recommended*' }
+    if (-not $rejected -or (Test-Path -LiteralPath $missingRuntime)) {
+        throw 'Missing configured Python version must stop before runtime creation.'
+    }
+}
+
 $defaultPython = Get-Command python.exe -CommandType Application | Select-Object -First 1 -ExpandProperty Source
 $defaultVersion = & $defaultPython -c 'import sys; print(sys.version_info.major, sys.version_info.minor, sep=chr(46))'
 if ($defaultVersion -ne '3.11') {
@@ -56,4 +69,4 @@ if ($defaultVersion -ne '3.11') {
     if (Test-Path -LiteralPath $invalid) { throw 'Wrong Python version created a runtime directory.' }
 }
 
-Write-Output 'Protected venv staging, pip dependency install and worker import passed'
+Write-Output 'Protected venv staging, pip dependency install, worker import and strict-version refusal passed'
