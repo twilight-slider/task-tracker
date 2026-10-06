@@ -92,20 +92,17 @@ internal static class PersistentWorkerTest
             { "installRoot", binRoot }, { "workerLanguage", "python" }
         }));
         var config = ServiceConfig.Load(configPath);
-        if (!config.PythonWorker || config.NodePath != null ||
-            config.PythonPath != Path.Combine(runtimeRoot, "Scripts", "python.exe") ||
+        if (config.PythonPath != Path.Combine(runtimeRoot, "Scripts", "python.exe") ||
             config.PythonScriptPath != Path.Combine(binRoot, "folder_worker.py"))
             throw new Exception("Python paths must derive from protected Tracker.");
-        var nodePath = Path.Combine(args[2], "node.exe");
-        File.WriteAllText(nodePath, "test fixture");
-        File.WriteAllText(Path.Combine(binRoot, "folder-worker.js"), "// test fixture");
         var legacyPath = Path.Combine(protectedRoot, "service-legacy.json");
         File.WriteAllText(legacyPath, Json.Serialize(new Dictionary<string, object> {
             { "serviceName", "test-service" }, { "serviceAccountSid", "S-1-5-18" },
             { "agentSid", "S-1-5-18" }, { "pipeName", "test-pipe" },
-            { "installRoot", binRoot }, { "nodePath", nodePath }
+            { "installRoot", binRoot }, { "nodePath", "C:\\node.exe" }
         }));
-        if (ServiceConfig.Load(legacyPath).PythonWorker) throw new Exception("Legacy Node configuration changed.");
+        try { ServiceConfig.Load(legacyPath); throw new Exception("Legacy Node configuration was accepted."); }
+        catch (InvalidDataException) { }
         string before = Hash(args[3]);
         using (var worker = new PersistentWorker(args[0], args[1], args[2], 500)) {
             worker.Start();

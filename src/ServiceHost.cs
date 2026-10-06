@@ -19,13 +19,11 @@ internal sealed class ServiceConfig
     internal string ServiceSid;
     internal string AgentSid;
     internal string PipeName;
-    internal string NodePath;
     internal string InstallRoot;
     internal string ConfigPath;
     internal string LogPath;
     internal int McpPort;
     internal string McpTokenPath;
-    internal bool PythonWorker;
     internal string PythonPath;
     internal string PythonScriptPath;
 
@@ -36,39 +34,32 @@ internal sealed class ServiceConfig
         var config = new ServiceConfig {
             ServiceName = field("serviceName"), ServiceSid = field("serviceAccountSid"),
             AgentSid = field("agentSid"), PipeName = field("pipeName"),
-            NodePath = field("nodePath"), InstallRoot = field("installRoot"),
+            InstallRoot = field("installRoot"),
             ConfigPath = Path.GetFullPath(path),
             LogPath = Path.Combine(Path.GetDirectoryName(path), "logs", "service.log"),
             McpPort = values.ContainsKey("mcpPort") && values["mcpPort"] is int ? (int)values["mcpPort"] : 0,
             McpTokenPath = Path.Combine(Path.GetDirectoryName(Path.GetFullPath(path)), "mcp-token")
         };
-        var workerLanguage = field("workerLanguage") ?? "node";
-        if (workerLanguage != "node" && workerLanguage != "python")
-            throw new InvalidDataException("Unknown worker language.");
-        config.PythonWorker = workerLanguage == "python";
+        if (field("workerLanguage") != "python")
+            throw new InvalidDataException("Python worker is required.");
         config.PythonPath = Path.Combine(Path.GetDirectoryName(config.ConfigPath), "runtime", "Scripts", "python.exe");
         config.PythonScriptPath = Path.Combine(config.InstallRoot ?? "", "folder_worker.py");
         if (String.IsNullOrWhiteSpace(config.ServiceName) || String.IsNullOrWhiteSpace(config.PipeName) ||
             String.IsNullOrWhiteSpace(config.ServiceSid) || String.IsNullOrWhiteSpace(config.AgentSid) ||
             !Path.IsPathRooted(config.InstallRoot) ||
-            (config.PythonWorker
-                ? !File.Exists(config.PythonPath) || !File.Exists(config.PythonScriptPath)
-                : !Path.IsPathRooted(config.NodePath) || !File.Exists(config.NodePath) ||
-                    !File.Exists(Path.Combine(config.InstallRoot, "folder-worker.js")))) {
+            !File.Exists(config.PythonPath) || !File.Exists(config.PythonScriptPath)) {
             throw new InvalidDataException("Invalid installed Task Folder MCP configuration.");
         }
-        if (config.PythonWorker) {
-            var protectedRoot = Path.GetDirectoryName(config.ConfigPath);
-            var expectedBin = Path.Combine(protectedRoot, "bin");
-            if (!Path.GetFullPath(config.InstallRoot).TrimEnd('\\').Equals(expectedBin.TrimEnd('\\'),
-                    StringComparison.OrdinalIgnoreCase) ||
-                (File.GetAttributes(expectedBin) & FileAttributes.ReparsePoint) != 0 ||
-                (File.GetAttributes(Path.Combine(protectedRoot, "runtime")) & FileAttributes.ReparsePoint) != 0 ||
-                (File.GetAttributes(Path.Combine(protectedRoot, "runtime", "Scripts")) & FileAttributes.ReparsePoint) != 0 ||
-                (File.GetAttributes(config.PythonPath) & FileAttributes.ReparsePoint) != 0 ||
-                (File.GetAttributes(config.PythonScriptPath) & FileAttributes.ReparsePoint) != 0)
-                throw new InvalidDataException("Python worker must be a plain protected Tracker copy.");
-        }
+        var protectedRoot = Path.GetDirectoryName(config.ConfigPath);
+        var expectedBin = Path.Combine(protectedRoot, "bin");
+        if (!Path.GetFullPath(config.InstallRoot).TrimEnd('\\').Equals(expectedBin.TrimEnd('\\'),
+                StringComparison.OrdinalIgnoreCase) ||
+            (File.GetAttributes(expectedBin) & FileAttributes.ReparsePoint) != 0 ||
+            (File.GetAttributes(Path.Combine(protectedRoot, "runtime")) & FileAttributes.ReparsePoint) != 0 ||
+            (File.GetAttributes(Path.Combine(protectedRoot, "runtime", "Scripts")) & FileAttributes.ReparsePoint) != 0 ||
+            (File.GetAttributes(config.PythonPath) & FileAttributes.ReparsePoint) != 0 ||
+            (File.GetAttributes(config.PythonScriptPath) & FileAttributes.ReparsePoint) != 0)
+            throw new InvalidDataException("Python worker must be a plain protected Tracker copy.");
         new SecurityIdentifier(config.ServiceSid);
         new SecurityIdentifier(config.AgentSid);
         if (values.ContainsKey("mcpPort") && (config.McpPort < 1 || config.McpPort > 65535 ||
@@ -480,7 +471,6 @@ internal sealed class TaskFolderService : ServiceBase
     private readonly object workerGate = new object();
     private Thread listener;
     private NamedPipeServerStream currentPipe;
-    private Process currentWorker;
     private McpHttpServer http;
     private PersistentWorker pythonWorker;
     private volatile bool stopping;
@@ -496,11 +486,9 @@ internal sealed class TaskFolderService : ServiceBase
     protected override void OnStart(string[] args)
     {
         try {
-            if (config.PythonWorker) {
-                pythonWorker = new PersistentWorker(config.PythonPath, config.PythonScriptPath,
-                    config.ConfigPath, 30000);
-                pythonWorker.Start();
-            }
+            pythonWorker = new PersistentWorker(config.PythonPath, config.PythonScriptPath,
+                config.ConfigPath, 30000);
+            pythonWorker.Start();
             if (config.McpPort != 0) {
                 http = new McpHttpServer(config.McpPort,
                     File.ReadAllText(config.McpTokenPath, Encoding.UTF8).Trim(), CallWorker);
@@ -523,7 +511,6 @@ internal sealed class TaskFolderService : ServiceBase
         if (pythonWorker != null) pythonWorker.Stop();
         lock (sync) {
             if (currentPipe != null) currentPipe.Dispose();
-            if (currentWorker != null && !currentWorker.HasExited) currentWorker.Kill();
         }
         if (listener != null) listener.Join(5000);
         Log("service stopped");
@@ -594,35 +581,7 @@ internal sealed class TaskFolderService : ServiceBase
     {
         lock (workerGate) {
             ProtectedRootAcl.Repair(config.ConfigPath);
-            if (config.PythonWorker) return pythonWorker.Call(request);
-            using (var worker = new Process()) {
-                worker.StartInfo = new ProcessStartInfo(config.NodePath,
-                    "\"" + Path.Combine(config.InstallRoot, "folder-worker.js") + "\" \"" + config.ConfigPath + "\"") {
-                    WorkingDirectory = config.InstallRoot, UseShellExecute = false, CreateNoWindow = true,
-                    RedirectStandardInput = true, RedirectStandardOutput = true, RedirectStandardError = true
-                };
-                try {
-                    lock (sync) {
-                        if (stopping) throw new InvalidOperationException("Service is stopping.");
-                        worker.Start();
-                        currentWorker = worker;
-                    }
-                    worker.StandardInput.WriteLine(request);
-                    worker.StandardInput.Close();
-                    var output = worker.StandardOutput.ReadLineAsync();
-                    if (!output.Wait(30000)) { worker.Kill(); throw new System.TimeoutException("Worker timed out."); }
-                    var response = output.Result;
-                    if (!worker.WaitForExit(30000)) { worker.Kill(); throw new System.TimeoutException("Worker timed out."); }
-                    var error = worker.StandardError.ReadToEnd();
-                    if (worker.ExitCode != 0 || String.IsNullOrWhiteSpace(response)) {
-                        Log("worker failure: " + error.Trim());
-                        throw new InvalidOperationException("Worker failed.");
-                    }
-                    return response;
-                } finally {
-                    lock (sync) if (currentWorker == worker) currentWorker = null;
-                }
-            }
+            return pythonWorker.Call(request);
         }
     }
 

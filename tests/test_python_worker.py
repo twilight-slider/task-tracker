@@ -1,6 +1,5 @@
-"""Cross-language contracts for the installed Python worker."""
+"""Contracts for the installed Python worker."""
 
-import hashlib
 import json
 import os
 from pathlib import Path
@@ -19,7 +18,7 @@ from task_folder import FolderStore
 from result_snapshot_store import SnapshotError, current_snapshot, create_snapshot, compare_snapshot
 
 
-class WorkerParity(unittest.TestCase):
+class WorkerContracts(unittest.TestCase):
     def setUp(self):
         base = ROOT / ".runtime" / "tests" / "python-worker"
         base.mkdir(parents=True, exist_ok=True)
@@ -52,12 +51,6 @@ class WorkerParity(unittest.TestCase):
             func(name)
         shutil.rmtree(self.directory, onerror=writable)
 
-    def _node(self, code, *args):
-        run = subprocess.run(["node", "-e", code, *map(str, args)], cwd=ROOT, capture_output=True, text=True,
-                             env={**os.environ, "GIT_CEILING_DIRECTORIES": str(self.directory)})
-        self.assertEqual(run.returncode, 0, run.stderr)
-        return json.loads(run.stdout)
-
     def _python_process(self, requests):
         data = "".join(json.dumps(item, ensure_ascii=False) + "\n" for item in requests)
         run = subprocess.run([sys.executable, "-I", str(ROOT / "src" / "folder_worker.py"), str(self.config)],
@@ -65,20 +58,15 @@ class WorkerParity(unittest.TestCase):
         self.assertEqual(run.returncode, 0, run.stderr)
         return [json.loads(line) for line in run.stdout.splitlines()]
 
-    def test_snapshot_fingerprint_matches_node_and_survives_cross_language_read(self):
+    def test_snapshot_fingerprint_and_read(self):
         (self.project / "utf-8.txt").write_bytes("\ufeffПривет\r\nмир\r\n\r\n".encode("utf-8"))
         (self.project / "binary.dat").write_bytes(bytes([0, 255, 3]))
         (self.project / "empty.txt").write_bytes(b"")
-        js = self._node("const s=require('./src/result-snapshot-store'); s.createSnapshot(process.argv[1],process.argv[2]).then(x=>console.log(JSON.stringify(x.snapshot))).catch(e=>{console.error(e);process.exit(1)})",
-                        self.task, self.project)
         py = current_snapshot(str(self.project))
-        self.assertEqual(py["files"], js["files"])
-        self.assertEqual(py["fingerprint"], js["fingerprint"])
-        self.assertEqual(compare_snapshot(str(self.task), js["snapshot_id"])["status"], "current")
         made = create_snapshot(str(self.task), str(self.project))
-        result = self._node("const s=require('./src/result-snapshot-store');s.compareSnapshot(process.argv[1],process.argv[2]).then(x=>console.log(JSON.stringify(x))).catch(e=>{console.error(e);process.exit(1)})",
-                            self.task, made["snapshot_id"])
-        self.assertEqual(result["status"], "current")
+        self.assertEqual(made["files"], py["files"])
+        self.assertEqual(made["fingerprint"], py["fingerprint"])
+        self.assertEqual(compare_snapshot(str(self.task), made["snapshot_id"])["status"], "current")
 
     def test_worker_json_and_read_contracts(self):
         requests = [
@@ -120,13 +108,6 @@ class WorkerParity(unittest.TestCase):
         self.assertEqual(stale["changes"]["modified"], ["note.txt"])
 
     def test_git_mode_tracks_untracked_and_skips_ignored(self):
-        spawn_probe = subprocess.run(
-            ["node", "-e", "require('node:child_process').execFileSync('git',['--version'])"],
-            cwd=ROOT, capture_output=True, text=True,
-        )
-        if spawn_probe.returncode and "EPERM" in spawn_probe.stderr:
-            self.skipTest("Windows sandbox denies Node child_process spawning git")
-        self.assertEqual(spawn_probe.returncode, 0, spawn_probe.stderr)
         subprocess.run(["git", "init", "-q"], cwd=self.project, check=True)
         (self.project / "tracked.txt").write_text("данные\n", encoding="utf-8")
         subprocess.run(["git", "add", "tracked.txt"], cwd=self.project, check=True)
@@ -137,12 +118,11 @@ class WorkerParity(unittest.TestCase):
         subprocess.run(["git", "-c", "user.name=Test", "-c", "user.email=test@example.invalid", "commit", "-qm", "fixture"],
                        cwd=self.project, check=True)
         (self.project / "ignored.txt").write_text("ignored", encoding="utf-8")
-        js = self._node("const s=require('./src/result-snapshot-store');s.createSnapshot(process.argv[1],process.argv[2]).then(x=>console.log(JSON.stringify(x.snapshot))).catch(e=>{console.error(e);process.exit(1)})",
-                        self.task, self.project)
         py = current_snapshot(str(self.project))
         self.assertEqual(py["project"]["mode"], "git")
-        self.assertEqual(py["files"], js["files"])
-        self.assertEqual(py["fingerprint"], js["fingerprint"])
+        made = create_snapshot(str(self.task), str(self.project))
+        self.assertEqual(py["files"], made["files"])
+        self.assertEqual(py["fingerprint"], made["fingerprint"])
 
     def test_folder_error_and_manifest_parity(self):
         self.assertEqual(FolderStore.jira_origin("https://[::1]:0"), "https://[::1]:0")
@@ -167,7 +147,7 @@ class WorkerParity(unittest.TestCase):
             self.assertEqual(jira["status"], "created")
             self.assertEqual(self.worker.call("set_task_jira_host", {"key": "JIRA-9", "jira_host": "https://example.test"})["status"], "already_set")
 
-    def test_missing_snapshot_root_and_acl_launch_failures_keep_js_codes(self):
+    def test_missing_snapshot_root_and_acl_launch_failures_keep_codes(self):
         missing = str(self.directory / "absent")
         self.assertEqual(self.worker.handle(json.dumps({"method": "create_result_snapshot", "arguments": {
             "key": "TEST-1", "project_root": missing}}).encode())["code"], "PROJECT_NOT_FOUND")

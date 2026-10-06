@@ -154,17 +154,24 @@ function Assert-TrackerRootBoundary([string]$TrackerRoot, [string]$TargetSid, [s
     $parent = Assert-PlainDirectory ([IO.Path]::GetDirectoryName($root))
     $trusted = @('S-1-5-18', 'S-1-5-32-544')
     if ($ServiceSid) { $trusted += $ServiceSid }
-    $write = [Security.AccessControl.FileSystemRights]'CreateFiles, CreateDirectories, WriteData, AppendData, Delete, DeleteSubdirectoriesAndFiles, ChangePermissions, TakeOwnership'
+    $parentDanger = [Security.AccessControl.FileSystemRights]'DeleteSubdirectoriesAndFiles, ChangePermissions, TakeOwnership'
+    $rootDanger = [Security.AccessControl.FileSystemRights]'CreateFiles, CreateDirectories, WriteData, AppendData, Delete, DeleteSubdirectoriesAndFiles, ChangePermissions, TakeOwnership'
     foreach ($path in @($parent, $root)) {
         $acl = Get-Acl -LiteralPath $path
+        if ($path -ieq $root -and -not $acl.AreAccessRulesProtected) {
+            throw "Tracker root must not inherit parent permissions: $root"
+        }
         $owner = $acl.GetOwner([Security.Principal.SecurityIdentifier]).Value
         $allowedOwners = if ($path -ieq $parent) { @('S-1-5-18', 'S-1-5-32-544') } else { $trusted }
         if ($owner -notin $allowedOwners) { throw "Untrusted Tracker boundary owner: $path ($owner)" }
         foreach ($rule in $acl.Access) {
             if ($rule.AccessControlType -ne 'Allow' -or $rule.PropagationFlags -eq [Security.AccessControl.PropagationFlags]::InheritOnly) { continue }
             $sid = $rule.IdentityReference.Translate([Security.Principal.SecurityIdentifier]).Value
-            if (-not (Test-TrustedTrackerBoundarySid -Sid $sid -ServiceSid $ServiceSid `
-                -TrustAuthenticatedUsers $TrustAuthenticatedUsers) -and ($rule.FileSystemRights -band $write)) {
+            $trustedForPath = if ($path -ieq $parent) {
+                Test-TrustedTrackerBoundarySid -Sid $sid -ServiceSid $ServiceSid -TrustAuthenticatedUsers $TrustAuthenticatedUsers
+            } else { $sid -in $trusted }
+            $danger = if ($path -ieq $parent) { $parentDanger } else { $rootDanger }
+            if (-not $trustedForPath -and ($rule.FileSystemRights -band $danger)) {
                 throw "Untrusted account can alter Tracker boundary: $path ($sid)"
             }
         }

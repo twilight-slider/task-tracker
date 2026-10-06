@@ -25,12 +25,13 @@ $parentOwner = $parentAcl.GetOwner([Security.Principal.SecurityIdentifier]).Valu
 if ($parentOwner -notin @($admins.Value, $system.Value)) {
     throw "Tracker parent is not administrator-owned: $parent (owner $parentOwner). Choose or prepare a dedicated parent; do not change shared parent ACL automatically."
 }
-$danger = [Security.AccessControl.FileSystemRights]'CreateFiles, CreateDirectories, WriteData, AppendData, Delete, DeleteSubdirectoriesAndFiles, ChangePermissions, TakeOwnership'
+$parentDanger = [Security.AccessControl.FileSystemRights]'DeleteSubdirectoriesAndFiles, ChangePermissions, TakeOwnership'
+$rootDanger = [Security.AccessControl.FileSystemRights]'CreateFiles, CreateDirectories, WriteData, AppendData, Delete, DeleteSubdirectoriesAndFiles, ChangePermissions, TakeOwnership'
 foreach ($rule in $parentAcl.Access) {
     if ($rule.AccessControlType -ne 'Allow' -or $rule.PropagationFlags -eq [Security.AccessControl.PropagationFlags]::InheritOnly) { continue }
     $sid = $rule.IdentityReference.Translate([Security.Principal.SecurityIdentifier]).Value
     if (-not (Test-TrustedTrackerBoundarySid -Sid $sid -ServiceSid $installedServiceSid `
-        -TrustAuthenticatedUsers ([bool]$TrustAuthenticatedUsers)) -and ($rule.FileSystemRights -band $danger)) {
+        -TrustAuthenticatedUsers ([bool]$TrustAuthenticatedUsers)) -and ($rule.FileSystemRights -band $parentDanger)) {
         throw "Tracker parent permits untrusted delete/ACL rights: $parent ($sid). Prepare a dedicated protected parent first."
     }
 }
@@ -58,7 +59,7 @@ if (Test-Path -LiteralPath $root) {
     foreach ($rule in $rootAcl.Access) {
         if ($rule.AccessControlType -ne 'Allow' -or $rule.PropagationFlags -eq [Security.AccessControl.PropagationFlags]::InheritOnly) { continue }
         $sid = $rule.IdentityReference.Translate([Security.Principal.SecurityIdentifier]).Value
-        if ($sid -eq $settings.TargetSid -and ($rule.FileSystemRights -band $danger)) {
+        if ($sid -eq $settings.TargetSid -and ($rule.FileSystemRights -band $rootDanger)) {
             throw "TargetUser can delete or alter ACL beneath existing Tracker: $root. Repair its ACL explicitly without changing owner."
         }
     }

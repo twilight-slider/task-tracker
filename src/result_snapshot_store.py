@@ -1,4 +1,4 @@
-"""Version 2 result snapshots, compatible with result-snapshot-store.js."""
+"""Version 2 result snapshots for the Python worker."""
 
 from __future__ import annotations
 
