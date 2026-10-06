@@ -156,6 +156,8 @@ activemq-data/
 /.venv/*
 !/.venv/setup_venv.ps1
 !/.venv/python_version.txt
+/vendor/*.zip
+/vendor/*.whl
 env/
 venv/
 ENV/

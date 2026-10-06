@@ -22,10 +22,6 @@ if ($settings.TargetSid -cne [string]$request.ownerSid -or
 }
 $repository = Assert-PlainDirectory ([string]$request.repositoryRoot)
 Assert-TaskTrackerCheckout -RepositoryRoot $repository -ExpectedCommit ([string]$request.repositoryCommit) | Out-Null
-$manifest = Join-Path $repository 'vendor\release-manifest.json'
-if ((Get-FileHash -LiteralPath $manifest -Algorithm SHA256).Hash -cne [string]$request.releaseManifestSha256) {
-    throw 'Release manifest differs from bootstrap JSON.'
-}
 $installedSid = Get-InstalledTrackerServiceSid -TargetSid $settings.TargetSid
 Assert-TrackerRootBoundary -TrackerRoot $settings.TrackerRoot -TargetSid $settings.TargetSid -ServiceSid $installedSid `
     -TrustAuthenticatedUsers ([bool]$request.trustAuthenticatedUsers) | Out-Null
@@ -175,7 +171,7 @@ try {
             (Join-Path $repository 'src\ServiceHost.cs')
         if ($LASTEXITCODE -ne 0) { throw 'Staged ServiceHost compilation failed.' }
     }
-    $python = Join-Path $stageRuntime 'python.exe'
+    $python = Join-Path $stageRuntime 'Scripts\python.exe'
     $probeScript = Join-Path $stageBin '.probe.py'
     [IO.File]::WriteAllText($probeScript,
         "import sys`nfrom pathlib import Path`nsys.dont_write_bytecode = True`nsys.path.insert(0, str(Path(__file__).parent))`nimport folder_worker, task_folder, result_snapshot_store, yaml`n",

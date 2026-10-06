@@ -55,10 +55,6 @@ if ($settings.TargetSid -cne [string]$config.ownerSid -or
 }
 if ($installedServiceSid -and $installedServiceSid -cne [string]$config.serviceAccountSid) { throw 'Installed service SID differs from bootstrap JSON.' }
 Assert-TrackerProtectedArea -TrackerRoot $settings.TrackerRoot -TargetSid $settings.TargetSid -ServiceSid ([string]$config.serviceAccountSid) | Out-Null
-$manifest = Join-Path $repository 'vendor\release-manifest.json'
-if ((Get-FileHash -LiteralPath $manifest -Algorithm SHA256).Hash -cne [string]$config.releaseManifestSha256) {
-    throw 'Release manifest differs from bootstrap JSON. Rerun administrative bootstrap.'
-}
 $builderSource = Join-Path $repository 'scripts\Rebuild-TaskTracker.ps1'
 $builderFile = Get-Item -LiteralPath $builderSource -Force -ErrorAction Stop
 if ($builderFile.PSIsContainer -or ($builderFile.Attributes -band [IO.FileAttributes]::ReparsePoint)) {

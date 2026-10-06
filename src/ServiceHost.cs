@@ -46,7 +46,7 @@ internal sealed class ServiceConfig
         if (workerLanguage != "node" && workerLanguage != "python")
             throw new InvalidDataException("Unknown worker language.");
         config.PythonWorker = workerLanguage == "python";
-        config.PythonPath = Path.Combine(Path.GetDirectoryName(config.ConfigPath), "runtime", "python.exe");
+        config.PythonPath = Path.Combine(Path.GetDirectoryName(config.ConfigPath), "runtime", "Scripts", "python.exe");
         config.PythonScriptPath = Path.Combine(config.InstallRoot ?? "", "folder_worker.py");
         if (String.IsNullOrWhiteSpace(config.ServiceName) || String.IsNullOrWhiteSpace(config.PipeName) ||
             String.IsNullOrWhiteSpace(config.ServiceSid) || String.IsNullOrWhiteSpace(config.AgentSid) ||
@@ -64,6 +64,7 @@ internal sealed class ServiceConfig
                     StringComparison.OrdinalIgnoreCase) ||
                 (File.GetAttributes(expectedBin) & FileAttributes.ReparsePoint) != 0 ||
                 (File.GetAttributes(Path.Combine(protectedRoot, "runtime")) & FileAttributes.ReparsePoint) != 0 ||
+                (File.GetAttributes(Path.Combine(protectedRoot, "runtime", "Scripts")) & FileAttributes.ReparsePoint) != 0 ||
                 (File.GetAttributes(config.PythonPath) & FileAttributes.ReparsePoint) != 0 ||
                 (File.GetAttributes(config.PythonScriptPath) & FileAttributes.ReparsePoint) != 0)
                 throw new InvalidDataException("Python worker must be a plain protected Tracker copy.");
