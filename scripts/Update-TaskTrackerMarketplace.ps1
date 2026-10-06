@@ -28,8 +28,8 @@ if ((Get-TrackerMarketplaceRegistrationAction -MarketplaceList $marketplaces) -c
 Assert-TrackerPublishedMarketplace -Root ([string]$marketplace[0].root) -Port $Port
 $plugins = & $codex plugin list --json | ConvertFrom-Json
 if ($LASTEXITCODE -ne 0) { throw 'Codex plugin list failed.' }
-foreach ($entry in @(@{ Name = 'task-folder-workflow'; Version = '0.6.0' },
-        @{ Name = 'task-tracker-mcp'; Version = '0.2.0' })) {
+foreach ($entry in @(@{ Name = 'task-folder-workflow'; Version = '0.6.1' },
+        @{ Name = 'task-tracker-mcp'; Version = '0.2.1' })) {
     $installed = @($plugins.installed | Where-Object { $_.pluginId -ceq "$($entry.Name)@ai-marketplace" })
     if ($installed.Count -ne 1 -or $installed[0].version -cne $entry.Version -or -not $installed[0].enabled) {
         & $codex plugin add "$($entry.Name)@ai-marketplace" --json | Out-Null

@@ -7,7 +7,7 @@ $files = @(
     'TaskTracker-AdminCommon.ps1', 'Prepare-TrackerRoot.ps1', 'Bootstrap-TaskTrackerAdmin.ps1',
     'TaskTracker-AdminWrapper.ps1', 'Rebuild-TaskTracker.ps1', 'Sync-TaskTrackerToken.ps1',
     'TaskTracker-TokenCore.ps1', 'TaskTracker-InstallLayout.ps1', 'TaskTracker-Marketplace.ps1',
-    'Update-TaskTrackerMarketplace.ps1', 'Start-CodexWithTrackerToken.ps1', 'Install-TaskTrackerV3.ps1'
+    'Update-TaskTrackerMarketplace.ps1', 'Install-TaskTrackerV3.ps1'
 )
 foreach ($name in $files) {
     $errors = $null
