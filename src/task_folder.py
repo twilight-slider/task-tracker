@@ -105,9 +105,7 @@ class FolderStore:
 
     def _write_manifest(self, manifest):
         config = self.config()
-        protected = Path(config["protectedRoot"])
-        protected.mkdir(parents=True, exist_ok=True)
-        temporary = protected / f".projects-{os.getpid()}-{time.time_ns()}.tmp"
+        temporary = Path(config["trackerRoot"]) / f".projects-{os.getpid()}-{time.time_ns()}.tmp"
         try:
             with temporary.open("x", encoding="utf-8") as output:
                 json.dump(self._validate_manifest(manifest), output, ensure_ascii=False, indent=2)

@@ -125,6 +125,26 @@ function Grant-TrackerRight([string]$Path, [Security.Principal.SecurityIdentifie
     $acl.AddAccessRule([Security.AccessControl.FileSystemAccessRule]::new($Sid, $Rights, $inherit, 'None', 'Allow'))
     Set-Acl -LiteralPath $Path -AclObject $acl
 }
+function Set-TrackerDirectoryAcl([string]$Path, [Security.Principal.SecurityIdentifier]$ServiceSid,
+    [Security.Principal.SecurityIdentifier]$TargetSid, [bool]$IsRoot) {
+    Remember-TrackerAcl $Path
+    $acl = Get-Acl -LiteralPath $Path
+    $acl.SetAccessRuleProtection($true, $false)
+    foreach ($rule in @($acl.Access)) { $acl.RemoveAccessRuleSpecific($rule) }
+    foreach ($sidValue in @('S-1-5-18', 'S-1-5-32-544', $ServiceSid.Value)) {
+        $acl.AddAccessRule([Security.AccessControl.FileSystemAccessRule]::new(
+            [Security.Principal.SecurityIdentifier]$sidValue, 'FullControl',
+            'ContainerInherit, ObjectInherit', 'None', 'Allow'))
+    }
+    if ($IsRoot) {
+        $acl.AddAccessRule([Security.AccessControl.FileSystemAccessRule]::new($TargetSid, 'ReadAndExecute', 'None', 'None', 'Allow'))
+        $acl.AddAccessRule([Security.AccessControl.FileSystemAccessRule]::new($TargetSid, 'ReadAndExecute', 'ContainerInherit', 'InheritOnly', 'Allow'))
+        $acl.AddAccessRule([Security.AccessControl.FileSystemAccessRule]::new($TargetSid, 'Read', 'ObjectInherit', 'InheritOnly', 'Allow'))
+    } else {
+        $acl.AddAccessRule([Security.AccessControl.FileSystemAccessRule]::new($TargetSid, 'ReadAndExecute', 'None', 'None', 'Allow'))
+    }
+    Set-Acl -LiteralPath $Path -AclObject $acl
+}
 function Protect-TrackerManifest([string]$Path, [Security.Principal.SecurityIdentifier]$ServiceSid) {
     Remember-TrackerAcl $Path
     $acl = Get-Acl -LiteralPath $Path
@@ -134,6 +154,8 @@ function Protect-TrackerManifest([string]$Path, [Security.Principal.SecurityIden
         $sidValue = [Security.Principal.SecurityIdentifier]$sidValue
         $acl.AddAccessRule([Security.AccessControl.FileSystemAccessRule]::new($sidValue, 'FullControl', 'Allow'))
     }
+    $acl.AddAccessRule([Security.AccessControl.FileSystemAccessRule]::new(
+        [Security.Principal.SecurityIdentifier]$settings.TargetSid, 'Read', 'Allow'))
     Set-Acl -LiteralPath $Path -AclObject $acl
 }
 function Assert-InstalledMcp([int]$Port, [string]$Token) {
@@ -200,7 +222,9 @@ try {
     $account.SID.GetBinaryForm($sidBytes, 0)
     [TaskFolderServiceLogonRight]::Grant($sidBytes) | Out-Null
     $sid = [Security.Principal.SecurityIdentifier]$account.SID.Value
-    foreach ($path in @($settings.TrackerRoot, $protected)) { Grant-TrackerRight -Path $path -Sid $sid -Rights 'FullControl' }
+    Set-TrackerDirectoryAcl -Path $settings.TrackerRoot -ServiceSid $sid `
+        -TargetSid ([Security.Principal.SecurityIdentifier]$settings.TargetSid) -IsRoot $true
+    Grant-TrackerRight -Path $protected -Sid $sid -Rights 'FullControl'
     $tasks = Join-Path $settings.TrackerRoot 'tasks'
     foreach ($dir in @($tasks, (Join-Path $protected 'state'), (Join-Path $protected 'logs'))) {
         Remember-TrackerAcl $dir
@@ -208,6 +232,8 @@ try {
         Assert-PlainDirectory $dir | Out-Null
         Grant-TrackerRight -Path $dir -Sid $sid -Rights 'FullControl'
     }
+    Set-TrackerDirectoryAcl -Path $tasks -ServiceSid $sid `
+        -TargetSid ([Security.Principal.SecurityIdentifier]$settings.TargetSid) -IsRoot $false
     $projects = Join-Path $settings.TrackerRoot 'projects.json'
     Remember-TrackerAcl $projects
     if (-not (Test-Path -LiteralPath $projects)) {
@@ -335,5 +361,31 @@ try {
     }
 } catch {
     throw "PLUGIN_UPDATE_INCOMPLETE: new service is running and rollback files are retained at $backup; $($_.Exception.Message)"
+}
+try {
+    $instructions = Join-Path $tasks 'AGENTS.md'
+    if (-not (Test-Path -LiteralPath $instructions)) {
+        $source = Join-Path $settings.TrackerRoot 'AGENTS.md'
+        if (-not (Test-Path -LiteralPath $source -PathType Leaf)) {
+            $source = Join-Path $repository 'templates\AGENTS.md'
+        }
+        Copy-Item -LiteralPath $source -Destination $instructions
+    }
+    Protect-TrackerManifest -Path $instructions -ServiceSid $sid
+    foreach ($name in @('AGENTS.md', 'AGENTS.before-AIDEV-60.md', 'mcp-adapter.js', 'tracker-client.json')) {
+        $legacy = Join-Path $settings.TrackerRoot $name
+        if (Test-Path -LiteralPath $legacy) {
+            $item = Get-Item -LiteralPath $legacy -Force
+            if ($item.PSIsContainer -or ($item.Attributes -band [IO.FileAttributes]::ReparsePoint)) {
+                throw "Legacy root entry is not a plain file: $legacy"
+            }
+            Remove-Item -LiteralPath $legacy
+        }
+    }
+    $unexpected = @(Get-ChildItem -LiteralPath $settings.TrackerRoot -File -Force |
+        Where-Object Name -ne 'projects.json' | Select-Object -ExpandProperty Name)
+    if ($unexpected.Count) { throw "Unexpected Tracker root files remain: $($unexpected -join ', ')" }
+} catch {
+    throw "ROOT_CLEANUP_INCOMPLETE: new service is running; $($_.Exception.Message)"
 }
 Write-Output "Installed: $serviceName; EXE reused: $reuseExe; Python runtime: $($request.runtimeRoot); plugins updated; rollback retained: $backup"

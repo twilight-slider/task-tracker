@@ -9,7 +9,7 @@ $config = Get-Content -LiteralPath $ConfigPath -Raw | ConvertFrom-Json
 $tasksRoot = [IO.Path]::GetFullPath([string]$config.tasksRoot).TrimEnd('\')
 $task = [IO.Path]::GetFullPath($TaskFolder).TrimEnd('\')
 $relative = [IO.Path]::GetRelativePath($tasksRoot, $task)
-if ($config.schemaVersion -ne 1 -or
+if ($config.schemaVersion -ne 2 -or
     ($Migration -and $relative -notmatch '^\d{4}\\[^\\]+$') -or
     (-not $Migration -and $relative -notmatch '^\d{4}\\[A-Z][A-Z0-9_-]*-[1-9][0-9]*$') -or
     -not $config.serviceAccountSid -or -not $config.agentSid) {
