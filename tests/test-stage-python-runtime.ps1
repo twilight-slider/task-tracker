@@ -7,8 +7,6 @@ $base = Join-Path $repo ('.runtime\tests\stage-python-runtime\run-' + $PID)
 New-Item -ItemType Directory -Path $base -Force | Out-Null
 $stage = Join-Path $base 'runtime'
 $script = Join-Path $repo 'scripts\Stage-PythonRuntime.ps1'
-$sourcePython = (& py.exe -3.11 -c 'import sys; print(sys.executable)' | Select-Object -Last 1).Trim()
-if ($LASTEXITCODE -ne 0 -or -not $sourcePython) { throw 'Install Python 3.11 before this test.' }
 $oldFindLinks = $env:PIP_FIND_LINKS
 $oldNoIndex = $env:PIP_NO_INDEX
 try {
@@ -16,7 +14,7 @@ try {
         $env:PIP_FIND_LINKS = $env:TRACKER_TEST_WHEEL_DIR
         $env:PIP_NO_INDEX = '1'
     }
-    $result = & $script -RuntimeRoot $stage -PythonExe $sourcePython
+    $result = & $script -RuntimeRoot $stage
 } finally {
     $env:PIP_FIND_LINKS = $oldFindLinks
     $env:PIP_NO_INDEX = $oldNoIndex
@@ -25,6 +23,10 @@ if ($result.PythonVersion -ne '3.11' -or $result.PyYAMLVersion -ne '6.0.3') {
     throw 'Unexpected virtual environment Python/PyYAML version.'
 }
 $python = Join-Path $stage 'Scripts\python.exe'
+$selectedBase = & $python -c 'import sys; print(sys.base_prefix)'
+if ($LASTEXITCODE -ne 0 -or $selectedBase -ne (& py.exe -3.11 -c 'import sys; print(sys.prefix)')) {
+    throw 'Runtime was not created from launcher-selected Python 3.11.'
+}
 $probe = & $python -I -c 'import yaml,sys; print(yaml.__version__,sys.flags.isolated)' 2>&1
 if ($LASTEXITCODE -ne 0 -or $probe -ne '6.0.3 1') { throw "Staged runtime import failed: $probe" }
 $bin = Join-Path $base 'bin'

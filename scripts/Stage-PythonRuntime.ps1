@@ -15,8 +15,18 @@ if ($requirementsFile.PSIsContainer -or ($requirementsFile.Attributes -band [IO.
     throw "Requirements must be a plain file: $requirements"
 }
 if (-not $PythonExe) {
-    $PythonExe = Get-Command python.exe -CommandType Application -ErrorAction Stop |
+    $launcher = Get-Command py.exe -CommandType Application -ErrorAction Stop |
         Select-Object -First 1 -ExpandProperty Source
+    $launcherFile = Get-Item -LiteralPath $launcher -Force -ErrorAction Stop
+    if ($launcherFile.PSIsContainer -or ($launcherFile.Attributes -band [IO.FileAttributes]::ReparsePoint)) {
+        throw "Python launcher must be a plain executable: $launcher"
+    }
+    $selection = & $launcher -3.11 -c 'import sys; print(sys.executable)' 2>&1
+    if ($LASTEXITCODE -ne 0 -or @($selection).Count -ne 1 -or
+        -not [IO.Path]::IsPathFullyQualified([string]$selection)) {
+        throw 'Python 3.11 is not available through py.exe. Install Python 3.11 with the Windows launcher.'
+    }
+    $PythonExe = [string]$selection
 }
 if (-not [IO.Path]::IsPathFullyQualified($PythonExe)) { throw 'PythonExe must be an absolute path.' }
 $sourcePython = [IO.Path]::GetFullPath($PythonExe)
@@ -26,7 +36,7 @@ if ($pythonFile.PSIsContainer -or ($pythonFile.Attributes -band [IO.FileAttribut
 }
 $sourceVersion = & $sourcePython -c 'import sys; print(sys.version_info.major, sys.version_info.minor, sep=chr(46))' 2>&1
 if ($LASTEXITCODE -ne 0 -or $sourceVersion -ne '3.11') {
-    throw "Python 3.11 is required in PATH; found '$sourceVersion' at $sourcePython. Install Python 3.11 or update PATH."
+    throw "Python 3.11 is required; found '$sourceVersion' at $sourcePython. Install Python 3.11 or select it through py.exe."
 }
 if (Test-Path -LiteralPath $runtime) {
     $existing = Get-Item -LiteralPath $runtime -Force
