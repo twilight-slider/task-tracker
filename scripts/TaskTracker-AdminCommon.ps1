@@ -42,6 +42,14 @@ function Read-TrackerFolderFromEnv([string]$EnvPath) {
     return $tracker
 }
 
+function Read-GitFolderFromEnv([string]$EnvPath) {
+    $matches = @((Read-TrackerUtf8File $EnvPath) -split "`r?`n" | Where-Object { $_ -match '^\s*GIT_FOLDER\s*=' })
+    if ($matches.Count -ne 1) { throw "$EnvPath must contain exactly one GIT_FOLDER=<absolute project root>." }
+    $raw = ($matches[0] -split '=', 2)[1].Trim()
+    if (-not (Test-AbsoluteWindowsPath $raw)) { throw "GIT_FOLDER must be an absolute path in $EnvPath." }
+    return Assert-PlainDirectory $raw
+}
+
 function Get-TargetTrackerSettings([string]$TargetUser) {
     if ([string]::IsNullOrWhiteSpace($TargetUser)) { throw 'Specify -TargetUser.' }
     try { $sid = ([Security.Principal.NTAccount]$TargetUser).Translate([Security.Principal.SecurityIdentifier]).Value }
