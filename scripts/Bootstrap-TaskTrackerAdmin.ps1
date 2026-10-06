@@ -55,12 +55,6 @@ if ($PSBoundParameters.ContainsKey('SnapshotRoots')) {
 if ($snapshotRootsToInstall.Count -eq 0) { throw 'SnapshotRoots cannot be empty.' }
 $snapshotRootsToInstall = @(Assert-TrackerSnapshotRoots -Roots $snapshotRootsToInstall -TrackerRoot $tracker)
 $rid = $settings.TargetSid.Split('-')[-1]
-$manifest = Join-Path $repository 'vendor\release-manifest.json'
-$manifestFile = Get-Item -LiteralPath $manifest -Force -ErrorAction Stop
-if ($manifestFile.PSIsContainer -or ($manifestFile.Attributes -band [IO.FileAttributes]::ReparsePoint)) {
-    throw "Release manifest must be a plain file: $manifest"
-}
-$manifestHash = (Get-FileHash -LiteralPath $manifest -Algorithm SHA256).Hash
 $config = [ordered]@{
     schemaVersion = 3
     targetUser = $TargetUser
@@ -79,7 +73,6 @@ $config = [ordered]@{
     mcpPort = 38772
     repositoryRoot = $repository
     repositoryCommit = $commit
-    releaseManifestSha256 = $manifestHash
     trustAuthenticatedUsers = [bool]$TrustAuthenticatedUsers
     snapshotRoots = $snapshotRootsToInstall
     marketplaceSource = 'https://github.com/twilight-slider/ai-marketplace.git'

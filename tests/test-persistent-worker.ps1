@@ -82,7 +82,8 @@ internal static class PersistentWorkerTest
         var binRoot = Path.Combine(protectedRoot, "bin");
         Directory.CreateDirectory(runtimeRoot);
         Directory.CreateDirectory(binRoot);
-        File.WriteAllText(Path.Combine(runtimeRoot, "python.exe"), "test fixture");
+        Directory.CreateDirectory(Path.Combine(runtimeRoot, "Scripts"));
+        File.WriteAllText(Path.Combine(runtimeRoot, "Scripts", "python.exe"), "test fixture");
         File.WriteAllText(Path.Combine(binRoot, "folder_worker.py"), "# test fixture");
         var configPath = Path.Combine(protectedRoot, "service.json");
         File.WriteAllText(configPath, Json.Serialize(new Dictionary<string, object> {
@@ -92,7 +93,7 @@ internal static class PersistentWorkerTest
         }));
         var config = ServiceConfig.Load(configPath);
         if (!config.PythonWorker || config.NodePath != null ||
-            config.PythonPath != Path.Combine(runtimeRoot, "python.exe") ||
+            config.PythonPath != Path.Combine(runtimeRoot, "Scripts", "python.exe") ||
             config.PythonScriptPath != Path.Combine(binRoot, "folder_worker.py"))
             throw new Exception("Python paths must derive from protected Tracker.");
         var nodePath = Path.Combine(args[2], "node.exe");

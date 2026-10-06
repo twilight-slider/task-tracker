@@ -7,11 +7,24 @@ $base = Join-Path $repo ('.runtime\tests\stage-python-runtime\run-' + $PID)
 New-Item -ItemType Directory -Path $base -Force | Out-Null
 $stage = Join-Path $base 'runtime'
 $script = Join-Path $repo 'scripts\Stage-PythonRuntime.ps1'
-$result = & $script -RuntimeRoot $stage
-if ($result.PythonVersion -ne '3.11.9' -or $result.PyYAMLVersion -ne '6.0.3') {
-    throw 'Unexpected staged runtime version.'
+$sourcePython = (& py.exe -3.11 -c 'import sys; print(sys.executable)' | Select-Object -Last 1).Trim()
+if ($LASTEXITCODE -ne 0 -or -not $sourcePython) { throw 'Install Python 3.11 before this test.' }
+$oldFindLinks = $env:PIP_FIND_LINKS
+$oldNoIndex = $env:PIP_NO_INDEX
+try {
+    if ($env:TRACKER_TEST_WHEEL_DIR) {
+        $env:PIP_FIND_LINKS = $env:TRACKER_TEST_WHEEL_DIR
+        $env:PIP_NO_INDEX = '1'
+    }
+    $result = & $script -RuntimeRoot $stage -PythonExe $sourcePython
+} finally {
+    $env:PIP_FIND_LINKS = $oldFindLinks
+    $env:PIP_NO_INDEX = $oldNoIndex
 }
-$python = Join-Path $stage 'python.exe'
+if ($result.PythonVersion -ne '3.11' -or $result.PyYAMLVersion -ne '6.0.3') {
+    throw 'Unexpected virtual environment Python/PyYAML version.'
+}
+$python = Join-Path $stage 'Scripts\python.exe'
 $probe = & $python -I -c 'import yaml,sys; print(yaml.__version__,sys.flags.isolated)' 2>&1
 if ($LASTEXITCODE -ne 0 -or $probe -ne '6.0.3 1') { throw "Staged runtime import failed: $probe" }
 $bin = Join-Path $base 'bin'
@@ -30,16 +43,15 @@ $tracker = Join-Path $base 'Tracker'
 $reply = '{"method":"get_tasks_folder","arguments":{}}' | & $python -I (Join-Path $bin 'folder_worker.py') $config
 if ($LASTEXITCODE -ne 0 -or -not (($reply | ConvertFrom-Json).ok)) { throw "Protected-style worker import failed: $reply" }
 
-$tampered = Join-Path $base 'tampered-packages'
-New-Item -ItemType Directory -Path $tampered | Out-Null
-Copy-Item -LiteralPath (Join-Path $repo 'vendor\python-3.11.9-embed-amd64.zip') -Destination $tampered
-$wheel = Join-Path $tampered 'pyyaml-6.0.3-cp311-cp311-win_amd64.whl'
-Copy-Item -LiteralPath (Join-Path $repo 'vendor\pyyaml-6.0.3-cp311-cp311-win_amd64.whl') -Destination $wheel
-[IO.File]::AppendAllText($wheel, 'tampered')
-$rejected = $false
-try { & $script -RuntimeRoot (Join-Path $base 'invalid-runtime') -PackageRoot $tampered | Out-Null }
-catch { $rejected = $_.Exception.Message -like '*hash mismatch*' }
-if (-not $rejected) { throw 'Tampered wheel was not rejected.' }
-if (Test-Path -LiteralPath (Join-Path $base 'invalid-runtime')) { throw 'Tampered package created a runtime directory.' }
+$defaultPython = Get-Command python.exe -CommandType Application | Select-Object -First 1 -ExpandProperty Source
+$defaultVersion = & $defaultPython -c 'import sys; print(sys.version_info.major, sys.version_info.minor, sep=chr(46))'
+if ($defaultVersion -ne '3.11') {
+    $invalid = Join-Path $base 'invalid-runtime'
+    $rejected = $false
+    try { & $script -RuntimeRoot $invalid -PythonExe $defaultPython | Out-Null }
+    catch { $rejected = $_.Exception.Message -like '*Python 3.11 is required*' }
+    if (-not $rejected) { throw 'Wrong Python version was not rejected.' }
+    if (Test-Path -LiteralPath $invalid) { throw 'Wrong Python version created a runtime directory.' }
+}
 
-Write-Output 'Pinned embedded Python/PyYAML staging and hash rejection passed'
+Write-Output 'Protected venv staging, pip dependency install and worker import passed'
