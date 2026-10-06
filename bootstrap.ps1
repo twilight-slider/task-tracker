@@ -21,3 +21,5 @@ if (-not $PSBoundParameters.ContainsKey('SnapshotRoots')) {
 & (Join-Path $PSScriptRoot 'scripts\Prepare-TrackerRoot.ps1') -TargetUser $TargetUser `
     -TrustAuthenticatedUsers:$TrustAuthenticatedUsers
 & (Join-Path $PSScriptRoot 'scripts\Bootstrap-TaskTrackerAdmin.ps1') @PSBoundParameters
+$settings = Get-TargetTrackerSettings -TargetUser $TargetUser
+& (Join-Path $settings.TrackerRoot '.protected\TaskTracker-AdminWrapper.ps1')
