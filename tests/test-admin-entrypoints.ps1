@@ -14,6 +14,9 @@ foreach ($name in $files) {
     [System.Management.Automation.Language.Parser]::ParseFile((Join-Path $repo "scripts\$name"), [ref]$null, [ref]$errors) | Out-Null
     if ($errors) { throw "PowerShell parser rejected $name : $errors" }
 }
+$errors = $null
+[System.Management.Automation.Language.Parser]::ParseFile((Join-Path $repo 'bootstrap.ps1'), [ref]$null, [ref]$errors) | Out-Null
+if ($errors) { throw "PowerShell parser rejected root bootstrap.ps1 : $errors" }
 $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
 if (-not ([Security.Principal.WindowsPrincipal]$identity).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
     $user = $identity.Name
@@ -23,6 +26,10 @@ if (-not ([Security.Principal.WindowsPrincipal]$identity).IsInRole([Security.Pri
         catch { $rejected = $_.Exception.Message -like '*elevated PowerShell*' }
         if (-not $rejected) { throw "$name accepted a non-administrator." }
     }
+    $rejected = $false
+    try { & (Join-Path $repo 'bootstrap.ps1') -TargetUser $user | Out-Null }
+    catch { $rejected = $_.Exception.Message -like '*elevated PowerShell*' }
+    if (-not $rejected) { throw 'Root bootstrap.ps1 accepted a non-administrator.' }
     $rejected = $false
     try { & (Join-Path $repo 'scripts\Install-TaskTrackerV3.ps1') -ConfigPath (Join-Path $repo 'missing.json') | Out-Null }
     catch { $rejected = $_.Exception.Message -like '*elevated PowerShell*' }
