@@ -333,9 +333,6 @@ try {
             }
         }
     }
-    $launcherSource = Join-Path $repository 'scripts\Start-CodexWithTrackerToken.ps1'
-    $launcherTarget = Join-Path (Split-Path -Parent $settings.EnvPath) 'Start-CodexWithTrackerToken.ps1'
-    Copy-Item -LiteralPath $launcherSource -Destination $launcherTarget -Force
 } catch {
     throw "PLUGIN_UPDATE_INCOMPLETE: new service is running and rollback files are retained at $backup; $($_.Exception.Message)"
 }
