@@ -6,6 +6,7 @@
 
 - **Windows и права администратора.** Bootstrap и установка службы запускаются в повышенной PowerShell; целевой пользователь и сервисная учётная запись должны быть разными.
 - **PowerShell 7 и Git.** `pwsh` выполняет сценарии, `git` проверяет клон и получает опубликованный marketplace. Репозиторий task-tracker должен быть на чистой `main`, совпадающей с локальной `origin/main`.
+- **Доступ установщика к checkout.** Учётной записи установщика нужны права чтения локального репозитория. При `dubious ownership` bootstrap добавит его путь в `safe.directory` этой учётной записи; ACL файлов не меняются.
 - **Python и пакеты.** Установленные Windows launcher `py.exe`, требуемая версия Python с `venv` и `pip`, доступный источник пакетов для установки PyYAML. Установщик создаёт отдельный защищённый venv; Python сам не скачивает.
 - **Компилятор .NET Framework 4.** `csc.exe` из Windows нужен при сборке или пересборке ядра службы.
 - **Node.js, Codex Desktop и CLI `codex`.** Node запускает MCP-клиенты двух плагинов; Codex устанавливает их из опубликованного Git marketplace.
@@ -62,6 +63,7 @@ pwsh -NoProfile -File .\bootstrap.ps1 -TargetUser 'DOMAIN\User'
 | `exactly one GIT_FOLDER`; `GIT_FOLDER must be an absolute path` | При первой установке добавить одну запись `GIT_FOLDER=<существующий абсолютный корень проектов>`, например `C:\Git`, либо явно передать `-SnapshotRoots`. |
 | `SnapshotRoots cannot be empty`; `At least one snapshot root is required`; `Bootstrap JSON must specify at least one snapshot root` | Задать `GIT_FOLDER` или непустой `-SnapshotRoots`; при повторной установке проверить сохранённые корни в `service.json`. |
 | `Directory path must be absolute`; `contains a file or reparse point`; `Snapshot root must be separate from Tracker storage` | Указать существующий обычный каталог абсолютным путём; не использовать ссылку и не пересекать его с Tracker. |
+| `Cannot grant Git safe.directory`; `detected dubious ownership` после повторной проверки | Проверить права чтения checkout, учётную запись запуска и доступ к её глобальной Git-конфигурации. Bootstrap доверяет только точному пути checkout. |
 | `Git check failed`; `checkout root differs`; `checkout must be on main`; `HEAD differs from local origin/main` | Проверить Git и правильный клон, перейти на `main`, синхронизировать его с локальным `origin/main`. |
 | `checkout has staged, unstaged or untracked changes`; `Checkout commit differs from bootstrap JSON` | Закоммитить или убрать изменения; после нового commit повторно запустить корневой bootstrap. |
 | `Choose a dedicated Tracker path`; `TRACKER_FOLDER is inside a user/system directory` | Выбрать отдельный каталог Tracker под выделенным родителем, вне профиля пользователя, системных каталогов и корня диска. |
