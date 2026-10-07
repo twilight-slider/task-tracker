@@ -5,11 +5,11 @@
 ## Требования
 
 - **Windows и права администратора.** Bootstrap и установка службы запускаются в повышенной PowerShell; целевой пользователь и сервисная учётная запись должны быть разными.
-- **PowerShell 7 и Git.** `pwsh` выполняет сценарии, `git` проверяет клон и получает опубликованный marketplace. Репозиторий task-tracker должен быть на чистой `main`, совпадающей с локальной `origin/main`.
+- **PowerShell 7 и Git.** `pwsh` выполняет сценарии, `git` проверяет клон. Репозиторий task-tracker должен быть на чистой `main`, совпадающей с локальной `origin/main`.
 - **Доступ установщика к checkout.** Учётной записи установщика нужны права чтения локального репозитория. При `dubious ownership` bootstrap добавит его путь в `safe.directory` этой учётной записи; ACL файлов не меняются.
 - **Python и пакеты.** Установленные Windows launcher `py.exe`, требуемая версия Python с `venv` и `pip`, доступный источник пакетов для установки PyYAML. Установщик создаёт отдельный защищённый venv; Python сам не скачивает.
 - **Компилятор .NET Framework 4.** `csc.exe` из Windows нужен при сборке или пересборке ядра службы.
-- **Node.js, Codex Desktop и CLI `codex`.** Node запускает MCP-клиенты двух плагинов; Codex устанавливает их из опубликованного Git marketplace.
+- **Node.js и Codex Desktop.** Node запускает MCP-клиенты двух плагинов; целевой пользователь устанавливает их в Codex самостоятельно.
 
 ## Настраиваемое окружение
 
@@ -28,9 +28,9 @@
 pwsh -NoProfile -File .\bootstrap.ps1 -TargetUser 'DOMAIN\User'
 ```
 
-Корневой `bootstrap.ps1` — единый вход: имя целевого пользователя задаётся один раз в аргументе `-TargetUser`, редактировать файл не нужно. Он проверяет Git, готовит защищённый корень, создаёт `bootstrap.json` и административный wrapper, затем сам запускает wrapper для установки или обновления службы и плагинов. При установке и переустановке `GIT_FOLDER` задаёт корень снимков в `service.json`; явный `-SnapshotRoots` переопределяет его. Для допустимого `Modify` на родителе дополнительный флаг не нужен; `-TrustAuthenticatedUsers` требуется лишь при более широких правах, которые администратор осознанно принимает. Владельца существующего Tracker скрипты не меняют.
+Корневой `bootstrap.ps1` — единый вход: имя целевого пользователя задаётся один раз в аргументе `-TargetUser`, редактировать файл не нужно. Он проверяет Git, готовит защищённый корень, создаёт `bootstrap.json` и административный wrapper, затем сам запускает wrapper для установки или обновления службы. При установке и переустановке `GIT_FOLDER` задаёт корень снимков в `service.json`; явный `-SnapshotRoots` переопределяет его. Для допустимого `Modify` на родителе дополнительный флаг не нужен; `-TrustAuthenticatedUsers` требуется лишь при более широких правах, которые администратор осознанно принимает. Владельца существующего Tracker скрипты не меняют.
 
-После установки полностью перезапустите Codex обычным способом. Плагины сами читают `TRACKER_MCP_TOKEN` из пользовательского `env.txt`; отдельный файл запуска Codex не нужен.
+Установщик не меняет плагины Codex и не запрашивает пароль целевого пользователя. В профиле TargetUser проверьте `ai-marketplace` из `https://github.com/twilight-slider/ai-marketplace.git` и включённые `task-folder-workflow@ai-marketplace` 0.6.1 и `task-tracker-mcp@ai-marketplace` 0.2.1. Если их нет, пользователь устанавливает их самостоятельно через Codex; после изменения плагинов полностью перезапустите Codex. Плагины сами читают `TRACKER_MCP_TOKEN` из пользовательского `env.txt`; отдельный файл запуска Codex не нужен.
 
 Подробности: [административный bootstrap](docs/admin-bootstrap.md), [установка v3](docs/install-v3.md).
 
@@ -47,8 +47,8 @@ pwsh -NoProfile -File .\bootstrap.ps1 -TargetUser 'DOMAIN\User'
 1. Корневой bootstrap требует повышенную PowerShell, чистую ветку `main` и равенство `HEAD` локальному `origin/main`; сетевой `fetch` он не делает.
 2. По `-TargetUser` определяется SID и профиль. Проверяются обычный файл `.env\env.txt`, ровно один абсолютный `TRACKER_FOLDER`; без `-SnapshotRoots` — ровно один существующий абсолютный `GIT_FOLDER`. Корни снимков должны существовать, быть обычными каталогами и не пересекаться с Tracker.
 3. Подготовка проверяет владельца и ACL родителя, корня и `.protected`; существующего владельца не меняет. Bootstrap сверяет SID установленной службы, сервисную учётную запись и защищённые файлы, затем создаёт `bootstrap.json` и wrapper.
-4. Защищённый wrapper повторяет проверки Git, SID, путей, владельцев и ACL. Установщик проверяет Python заданной версии, `venv`, `pip` и PyYAML, компилятор C#, опубликованный marketplace, обе копии MCP-токена и привязку существующей службы до переключения файлов.
-5. После установки проверяются статус службы `Running/Automatic`, авторизованный MCP-запрос и наличие инструментов обоих плагинов. При сбое установки выполняется откат; незавершённый откат помечается `RECOVERY_INCOMPLETE`.
+4. Защищённый wrapper повторяет проверки Git, SID, путей, владельцев и ACL. Установщик проверяет Python заданной версии, `venv`, `pip` и PyYAML, компилятор C#, обе копии MCP-токена и привязку существующей службы до переключения файлов.
+5. После установки проверяются статус службы `Running/Automatic` и авторизованный MCP-запрос. Плагины Codex проверяет и устанавливает сам целевой пользователь. При сбое установки выполняется откат; незавершённый откат помечается `RECOVERY_INCOMPLETE`.
 
 ## Ошибки установки и исправление
 
@@ -82,13 +82,9 @@ pwsh -NoProfile -File .\bootstrap.ps1 -TargetUser 'DOMAIN\User'
 | `RuntimeRoot must be an empty plain directory`; `could not create the protected virtual environment`; `Virtual environment Python is missing` | Проверить права на защищённый staging, поддержку `venv` у выбранного Python и свободное место; убрать повреждённый staging штатной очисткой. |
 | `pip could not install dependencies`; `Python/PyYAML import failed`; `Staged Python worker import failed` | Обеспечить доступный `pip` источник пакетов и совместимый PyYAML, затем повторить установку; проверить исходную ошибку импорта. |
 | `C# compiler is missing`; `Staged ServiceHost compilation failed`; `Stable service EXE copy hash mismatch` | Проверить компонент .NET Framework 4 и компилятор, исходник C# и целостность установленного EXE; повторить после исправления. |
-| `Cannot read published ai-marketplace`; `Published marketplace lacks`; `does not match ... release`; `lacks ... tool` | Опубликовать ожидаемые версии плагинов в Git marketplace и проверить доступ к его `master`; локальной правки кэша недостаточно. |
-| `Codex ai-marketplace is not the expected Git source`; `Codex could not add`; `marketplace upgrade/list failed`; `plugin list/add failed`; `MCP ... tools are unavailable` | Проверить CLI `codex`, Git-источник marketplace, сеть, установленные версии и лог ошибки; обновить плагины штатным процессом от целевого пользователя. |
-| `Run marketplace update as TargetUser`; `TargetUser credentials were not provided`; `TargetUser Codex marketplace update failed` | Выполнить обновление в профиле целевого пользователя или предоставить его учётные данные в защищённом запросе установщика. |
 | `duplicate TRACKER_MCP_TOKEN`; `TargetUser env.txt has no TRACKER_MCP_TOKEN`; `MCP token copies disagree or one is missing`; `MCP token is empty`; `MCP token verification failed` | Остановить переустановку и согласовать две копии токена: в `.protected\mcp-token` и пользовательском `env.txt`; не выводить токен в журнал. |
 | `Cannot rotate an absent MCP token`; `Installed Python MCP service configuration is required for token rotation`; `MCP service must be Running before token rotation`; `MCP endpoint did not accept the token` | Сначала завершить первичную установку и запустить службу; при ротации проверить конфигурацию, порт и состояние MCP, затем повторить отдельную команду ротации. |
 | `Service did not reach Running/Automatic`; `Installed MCP did not accept the configured token` | Проверить журнал службы, её учётную запись, порт и обе копии токена; установщик попытается вернуть прежнюю версию. |
 | `Installation failed; previous service restored`; `MCP token update rolled back` | Исправить исходную причину после двоеточия и повторить; прежнее состояние восстановлено. |
 | `RECOVERY_INCOMPLETE`; `SCM failed to delete`; `newly created service is still registered`; `Refusing to remove a path outside protected Tracker` | Не запускать повторную установку вслепую. Сохранить каталог `.rollback-*`, проверить пути, службу, токен, ACL и учётную запись вручную под администратором. |
-| `RECOVERY_INCOMPLETE` после обновления плагинов | Установщик возвращает прежнюю службу, но состояние плагинов могло измениться. Сохранить `.rollback-*`, сверить оба плагина и их доступ к MCP перед повторной установкой. |
 | `Unexpected Tracker root files remain` | Установщик возвращает прежнюю службу; проверить перечисленные файлы в корне. Он удаляет только известные старые файлы, неизвестные данные сохраняет. |

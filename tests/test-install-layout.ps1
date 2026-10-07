@@ -107,10 +107,15 @@ $ownerFunction = $syntax.Find({ param($node) $node -is [Management.Automation.La
     $node.Name -eq 'Set-TrackerDirectoryAcl' }, $true)
 if (-not $ownerFunction) { throw 'Installer tasks ACL function is missing.' }
 $transaction = @($syntax.FindAll({ param($node) $node -is [Management.Automation.Language.TryStatementAst] -and
-    $node.Body.Extent.Text.Contains('Update-TaskTrackerMarketplace.ps1') -and
+    $node.Body.Extent.Text.Contains('Start-Service -Name $serviceName') -and
     @($node.CatchClauses).Count -gt 0 -and
     $node.CatchClauses[0].Extent.Text.Contains('Restore-TrackerServiceInstall') }, $true))
-if ($transaction.Count -ne 1) { throw 'Plugin update is outside the service rollback transaction.' }
+if ($transaction.Count -ne 1) { throw 'Service start is outside the rollback transaction.' }
+if ($syntax.Extent.Text.Contains('Update-TaskTrackerMarketplace.ps1') -or
+    $syntax.Extent.Text.Contains('Get-Credential -UserName ([string]$request.targetUser)') -or
+    -not $syntax.Extent.Text.Contains('Codex plugins unchanged')) {
+    throw 'Installer must leave TargetUser Codex plugins unchanged.'
+}
 Invoke-Expression $ownerFunction.Extent.Text
 function Remember-TrackerAcl([string]$Path) { }
 $script:aclResult = $null
