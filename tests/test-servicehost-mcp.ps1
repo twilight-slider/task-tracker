@@ -122,7 +122,7 @@ internal static class McpHttpTest
     }
 }
 '@ | Set-Content -LiteralPath $source -Encoding UTF8
-$csc = 'C:\Windows\Microsoft.NET\Framework64\v4.0.30319\csc.exe'
+$csc = Join-Path ([Environment]::GetFolderPath([Environment+SpecialFolder]::Windows)) 'Microsoft.NET\Framework64\v4.0.30319\csc.exe'
 & $csc /nologo /target:exe /main:McpHttpTest "/out:$exe" /reference:System.ServiceProcess.dll /reference:System.Web.Extensions.dll (Join-Path $repo 'src\ServiceHost.cs') $source
 if ($LASTEXITCODE -ne 0) { throw 'HTTP MCP test did not compile.' }
 & $exe

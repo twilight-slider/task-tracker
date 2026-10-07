@@ -87,19 +87,21 @@ $snapshotRoots = @($request.snapshotRoots | Where-Object { $_ })
 if ($snapshotRoots.Count -eq 0) { throw 'Bootstrap JSON must specify at least one snapshot root.' }
 $snapshotRoots = @(Assert-TrackerSnapshotRoots -Roots $snapshotRoots -TrackerRoot $settings.TrackerRoot)
 $pwsh = (Get-Command pwsh.exe -ErrorAction Stop).Source
-$windows = [Environment]::GetFolderPath([Environment+SpecialFolder]::Windows)
-$csc = Join-Path $windows 'Microsoft.NET\Framework64\v4.0.30319\csc.exe'
-if (-not (Test-Path -LiteralPath $csc -PathType Leaf)) { throw 'C# compiler is missing.' }
-foreach ($tool in @($pwsh, $csc)) {
-    $item = Get-Item -LiteralPath $tool -Force
-    if ($item.Attributes -band [IO.FileAttributes]::ReparsePoint) { throw "Executable is a reparse point: $tool" }
-}
+$pwshFile = Get-Item -LiteralPath $pwsh -Force
+if ($pwshFile.Attributes -band [IO.FileAttributes]::ReparsePoint) { throw "Executable is a reparse point: $pwsh" }
 $stage = Join-Path $protected ('.stage-' + [guid]::NewGuid().ToString('N'))
 $backup = Join-Path $protected ('.rollback-' + [guid]::NewGuid().ToString('N'))
 $stageBin = Join-Path $stage 'bin'
 $stageRuntime = Join-Path $stage 'runtime'
 $hostHash = (Get-FileHash -LiteralPath (Join-Path $repository 'src\ServiceHost.cs') -Algorithm SHA256).Hash
 $reuseExe = Test-TrackerHostReuse -PriorConfig $prior -SourceHash $hostHash -ExistingExe $exe
+if (-not $reuseExe) {
+    $windows = [Environment]::GetFolderPath([Environment+SpecialFolder]::Windows)
+    $csc = Join-Path $windows 'Microsoft.NET\Framework64\v4.0.30319\csc.exe'
+    if (-not (Test-Path -LiteralPath $csc -PathType Leaf)) { throw 'C# compiler is missing.' }
+    $cscFile = Get-Item -LiteralPath $csc -Force
+    if ($cscFile.Attributes -band [IO.FileAttributes]::ReparsePoint) { throw "Executable is a reparse point: $csc" }
+}
 $createdAccount = $false
 $createdService = $false
 $bootstrapUpdated = $false

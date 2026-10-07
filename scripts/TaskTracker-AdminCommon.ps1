@@ -68,16 +68,9 @@ function Get-TargetTrackerSettings([string]$TargetUser) {
 function Assert-TaskTrackerCheckout([string]$RepositoryRoot, [string]$ExpectedCommit) {
     $repository = Assert-PlainDirectory $RepositoryRoot
     $git = (Get-Command git.exe -ErrorAction Stop).Source
+    $safeDirectory = $repository.Replace('\', '/')
     function Read-Git([string[]]$Arguments) {
-        $output = & $git -C $repository @Arguments 2>&1
-        if ($LASTEXITCODE -ne 0 -and ($output | Out-String) -match 'detected dubious ownership') {
-            $safeDirectory = $repository.Replace('\', '/')
-            & $git config --global --add safe.directory $safeDirectory 2>&1 | Out-Null
-            if ($LASTEXITCODE -ne 0) {
-                throw "Cannot grant Git safe.directory for $repository. Check write access to the installer's global Git config."
-            }
-            $output = & $git -C $repository @Arguments 2>&1
-        }
+        $output = & $git -c "safe.directory=$safeDirectory" -C $repository @Arguments 2>&1
         if ($LASTEXITCODE -ne 0) { throw "Git check failed: git $($Arguments -join ' ')`n$(($output | Out-String).Trim())" }
         return (($output | Out-String).Trim())
     }

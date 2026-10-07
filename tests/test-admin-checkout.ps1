@@ -20,19 +20,11 @@ $previousDifferentOwner = [Environment]::GetEnvironmentVariable('GIT_TEST_ASSUME
 try {
     $env:GIT_CONFIG_GLOBAL = Join-Path $base 'gitconfig'
     $env:GIT_TEST_ASSUME_DIFFERENT_OWNER = '1'
+    $probe = & git -C $work rev-parse --show-toplevel 2>&1
+    $ownershipSimulated = $LASTEXITCODE -ne 0 -and ($probe | Out-String) -match 'detected dubious ownership'
     Assert-TaskTrackerCheckout -RepositoryRoot $work | Out-Null
-    $trusted = @(& git config --global --get-all safe.directory)
-    if ($trusted.Count -ne 1 -or $trusted[0] -cne $work.Replace('\', '/')) {
-        throw 'Checkout was not granted exact Git safe.directory access.'
-    }
-    $blockedConfig = Join-Path $base 'blocked-gitconfig'
-    New-Item -ItemType Directory -Path $blockedConfig | Out-Null
-    $env:GIT_CONFIG_GLOBAL = $blockedConfig
-    try { Assert-TaskTrackerCheckout -RepositoryRoot $work | Out-Null; throw 'Unwritable Git config was accepted.' }
-    catch {
-        if ($_.Exception.Message -eq 'Unwritable Git config was accepted.' -or
-            $_.Exception.Message -notlike 'Cannot grant Git safe.directory*') { throw }
-    }
+    if (Test-Path -LiteralPath $env:GIT_CONFIG_GLOBAL) { throw 'Git trust changed the global Git config.' }
+    if (-not $ownershipSimulated) { Write-Output 'Git ownership simulation unavailable; scoped trust was not exercised.' }
 } finally {
     [Environment]::SetEnvironmentVariable('GIT_CONFIG_GLOBAL', $previousGlobalConfig, 'Process')
     [Environment]::SetEnvironmentVariable('GIT_TEST_ASSUME_DIFFERENT_OWNER', $previousDifferentOwner, 'Process')

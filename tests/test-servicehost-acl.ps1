@@ -4,7 +4,7 @@ $testRoot = Join-Path $repo ('.runtime\tests\test-servicehost-acl\run-' + $PID)
 $protected = Join-Path $testRoot '.protected'
 New-Item -ItemType Directory -Path $protected -Force | Out-Null
 $exe = Join-Path $testRoot 'TaskTrackerService.exe'
-$csc = 'C:\Windows\Microsoft.NET\Framework64\v4.0.30319\csc.exe'
+$csc = Join-Path ([Environment]::GetFolderPath([Environment+SpecialFolder]::Windows)) 'Microsoft.NET\Framework64\v4.0.30319\csc.exe'
 & $csc /nologo /target:exe "/out:$exe" /reference:System.ServiceProcess.dll /reference:System.Web.Extensions.dll (Join-Path $repo 'src\ServiceHost.cs')
 if ($LASTEXITCODE -ne 0) { throw 'Service host did not compile.' }
 & icacls.exe $protected /grant '*S-1-5-11:(F)' | Out-Null
