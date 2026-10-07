@@ -2,6 +2,7 @@
 
 import json
 import os
+from concurrent.futures import ProcessPoolExecutor
 from pathlib import Path
 import shutil
 import stat
@@ -16,6 +17,15 @@ sys.path.insert(0, str(ROOT / "src"))
 from folder_worker import Worker
 from task_folder import FolderStore
 from result_snapshot_store import SnapshotError, current_snapshot, create_snapshot, compare_snapshot
+
+
+def create_local_in_process(config_path, number):
+    with patch.object(FolderStore, "_secure", return_value=None):
+        response = Worker(config_path).handle(json.dumps({"method": "create_local_task_folder", "arguments": {
+            "project_key": "TEST", "title": f"Task {number}", "statement": "Test task"}}).encode())
+        if not response["ok"]:
+            raise AssertionError(response)
+        return response["data"]["key"]
 
 
 class WorkerContracts(unittest.TestCase):
@@ -134,6 +144,27 @@ class WorkerContracts(unittest.TestCase):
         self.assertEqual(self.worker.handle(json.dumps({"method": "create_task_subdirectory", "arguments": {
             "key": "TEST-1", "relative_path": "input/CON"}}).encode())["code"], "TASK_PATH_INVALID")
 
+    def test_project_registration_roundtrip_and_rejections(self):
+        (self.tracker / "projects.json").unlink()
+        def call(method, arguments):
+            return self.worker.handle(json.dumps({"method": method, "arguments": arguments}).encode())
+        local = {"project_key": "LOCAL", "source_type": "NO_JIRA"}
+        jira = {"project_key": "JIRA", "source_type": "JIRA_CLOUD", "jira_host": "https://example.test"}
+        self.assertEqual(call("register_task_project", local)["data"]["status"], "created")
+        self.assertEqual(call("register_task_project", jira)["data"]["status"], "created")
+        before = call("get_task_projects", {})["data"]["manifest"]
+        self.assertEqual([p["project_key"] for p in before["projects"]], ["LOCAL", "JIRA"])
+        self.assertEqual(call("register_task_project", local)["data"]["status"], "already_exists")
+        self.assertEqual(call("register_task_project", {**jira, "jira_host": "https://other.test"})["code"],
+                         "PROJECT_CONFLICT")
+        self.assertEqual(call("register_task_project", {"project_key": "bad", "source_type": "NO_JIRA"})["code"],
+                         "PROJECT_MANIFEST_INVALID")
+        self.assertEqual(call("create_local_task_folder", {
+            "project_key": "JIRA", "title": "Invalid", "statement": "Invalid"})["code"], "PROJECT_SOURCE_CONFLICT")
+        self.assertEqual(call("create_local_task_folder", {
+            "project_key": "LOCAL", "title": "", "statement": "Invalid"})["code"], "TASK_PATH_INVALID")
+        self.assertEqual(call("get_task_projects", {})["data"]["manifest"], before)
+
     def test_folder_creation_and_jira_host_contract(self):
         with patch.object(FolderStore, "_secure", return_value=None):
             local = self.worker.call("create_local_task_folder", {"project_key": "TEST", "title": "Заголовок", "statement": "Описание"})
@@ -146,6 +177,23 @@ class WorkerContracts(unittest.TestCase):
             jira = self.worker.call("set_task_jira_host", {"key": "JIRA-9", "jira_host": "https://example.test"})
             self.assertEqual(jira["status"], "created")
             self.assertEqual(self.worker.call("set_task_jira_host", {"key": "JIRA-9", "jira_host": "https://example.test"})["status"], "already_set")
+
+    def test_parallel_local_numbers_survive_worker_restart(self):
+        with ProcessPoolExecutor(max_workers=4) as pool:
+            keys = list(pool.map(create_local_in_process, [str(self.config)] * 8, range(8)))
+        self.assertEqual(sorted(int(key.split("-")[-1]) for key in keys), list(range(2, 10)))
+        self.assertEqual(len(set(keys)), 8)
+        with ProcessPoolExecutor(max_workers=1) as pool:
+            next_key = pool.submit(create_local_in_process, str(self.config), 9).result()
+        self.assertEqual(next_key, "TEST-10")
+        self.assertEqual(self.worker.call("register_task_project", {
+            "project_key": "TEST", "source_type": "NO_JIRA"})["status"], "already_exists")
+        before = self.worker.call("get_task_projects", {})["manifest"]
+        self.assertEqual(before["projects"][0]["next_issue_number"], 11)
+        self.assertEqual(self.worker.handle(json.dumps({"method": "register_task_project", "arguments": {
+            "project_key": "TEST", "source_type": "JIRA_CLOUD", "jira_host": "https://example.test"}}).encode())["code"],
+                         "PROJECT_CONFLICT")
+        self.assertEqual(self.worker.call("get_task_projects", {})["manifest"], before)
 
     def test_missing_snapshot_root_and_acl_launch_failures_keep_codes(self):
         missing = str(self.directory / "absent")
