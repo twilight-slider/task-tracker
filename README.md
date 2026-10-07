@@ -15,7 +15,7 @@
 
 - **`-TargetUser`.** Обязательное имя пользователя Windows, для которого работает Tracker, например `DOMAIN\User`. Bootstrap читает профиль именно этого пользователя, даже если администратор вошёл под другой учётной записью.
 - **`<профиль TargetUser>\.env\env.txt`.** Обычный UTF-8 файл, создаваемый пользователем до первого запуска. В нём нужна ровно одна запись `TRACKER_FOLDER=<абсолютный выделенный каталог Tracker>` и одна `GIT_FOLDER=<существующий абсолютный корень проектов, например C:\Git>`.
-- **`GIT_FOLDER`.** При первой установке без `-SnapshotRoots` становится разрешённым корнем снимков. При переустановке без параметра сохраняются корни из установленного `service.json`.
+- **`GIT_FOLDER`.** При установке и переустановке без `-SnapshotRoots` становится разрешённым корнем снимков в `service.json`.
 - **`TRACKER_MCP_TOKEN`.** Вручную не задаётся: первая установка создаёт его в пользовательском `env.txt` и защищённом Tracker; переустановка сверяет и сохраняет обе копии.
 - **[`.venv/python_version.txt`](.venv/python_version.txt) и [requirements.txt](requirements.txt).** Версионируемые настройки Python и пакетов. Сейчас задан `python3.11` и `PyYAML==6.0.3`; при отсутствии этой версии установка останавливается без fallback.
 - **`-SnapshotRoots`, `-ServiceAccountName`, `-TrustAuthenticatedUsers`.** Необязательные параметры bootstrap: первый явно задаёт один или несколько корней снимков, второй — имя сервисной учётной записи, третий допускает широкий доступ к родительскому каталогу Tracker только при сознательном доверии этим пользователям.
@@ -28,7 +28,7 @@
 pwsh -NoProfile -File .\bootstrap.ps1 -TargetUser 'DOMAIN\User'
 ```
 
-Корневой `bootstrap.ps1` — единый вход: имя целевого пользователя задаётся один раз в аргументе `-TargetUser`, редактировать файл не нужно. Он проверяет Git, готовит защищённый корень, создаёт `bootstrap.json` и административный wrapper, затем сам запускает wrapper для установки или обновления службы и плагинов. При первой установке `GIT_FOLDER` задаёт корень снимков; при повторной сохраняются уже установленные корни. Явный `-SnapshotRoots` переопределяет их. Для допустимого `Modify` на родителе дополнительный флаг не нужен; `-TrustAuthenticatedUsers` требуется лишь при более широких правах, которые администратор осознанно принимает. Владельца существующего Tracker скрипты не меняют.
+Корневой `bootstrap.ps1` — единый вход: имя целевого пользователя задаётся один раз в аргументе `-TargetUser`, редактировать файл не нужно. Он проверяет Git, готовит защищённый корень, создаёт `bootstrap.json` и административный wrapper, затем сам запускает wrapper для установки или обновления службы и плагинов. При установке и переустановке `GIT_FOLDER` задаёт корень снимков в `service.json`; явный `-SnapshotRoots` переопределяет его. Для допустимого `Modify` на родителе дополнительный флаг не нужен; `-TrustAuthenticatedUsers` требуется лишь при более широких правах, которые администратор осознанно принимает. Владельца существующего Tracker скрипты не меняют.
 
 После установки полностью перезапустите Codex обычным способом. Плагины сами читают `TRACKER_MCP_TOKEN` из пользовательского `env.txt`; отдельный файл запуска Codex не нужен.
 
@@ -45,7 +45,7 @@ pwsh -NoProfile -File .\bootstrap.ps1 -TargetUser 'DOMAIN\User'
 ## Что проверяют скрипты
 
 1. Корневой bootstrap требует повышенную PowerShell, чистую ветку `main` и равенство `HEAD` локальному `origin/main`; сетевой `fetch` он не делает.
-2. По `-TargetUser` определяется SID и профиль. Проверяются обычный файл `.env\env.txt`, ровно один абсолютный `TRACKER_FOLDER`; при первой установке без `-SnapshotRoots` — ровно один существующий абсолютный `GIT_FOLDER`. Корни снимков должны существовать, быть обычными каталогами и не пересекаться с Tracker.
+2. По `-TargetUser` определяется SID и профиль. Проверяются обычный файл `.env\env.txt`, ровно один абсолютный `TRACKER_FOLDER`; без `-SnapshotRoots` — ровно один существующий абсолютный `GIT_FOLDER`. Корни снимков должны существовать, быть обычными каталогами и не пересекаться с Tracker.
 3. Подготовка проверяет владельца и ACL родителя, корня и `.protected`; существующего владельца не меняет. Bootstrap сверяет SID установленной службы, сервисную учётную запись и защищённые файлы, затем создаёт `bootstrap.json` и wrapper.
 4. Защищённый wrapper повторяет проверки Git, SID, путей, владельцев и ACL. Установщик проверяет Python заданной версии, `venv`, `pip` и PyYAML, компилятор C#, опубликованный marketplace, обе копии MCP-токена и привязку существующей службы до переключения файлов.
 5. После установки проверяются статус службы `Running/Automatic`, авторизованный MCP-запрос и наличие инструментов обоих плагинов. При сбое установки выполняется откат; незавершённый откат помечается `RECOVERY_INCOMPLETE`.
@@ -60,8 +60,8 @@ pwsh -NoProfile -File .\bootstrap.ps1 -TargetUser 'DOMAIN\User'
 | `Specify -TargetUser`; `Cannot resolve TargetUser`; `TargetUser profile is invalid` | Передать существующее имя `DOMAIN\User`; убедиться, что у пользователя создан профиль. |
 | `TargetUser env file is missing`; `env file must be plain` | Создать обычный `<профиль>\.env\env.txt`, не ссылку, доступный для чтения администратору. |
 | `exactly one TRACKER_FOLDER`; `TRACKER_FOLDER must be an absolute path`; `cannot be a volume root` | Оставить одну запись `TRACKER_FOLDER=<абсолютный выделенный каталог>`; не указывать корень диска. |
-| `exactly one GIT_FOLDER`; `GIT_FOLDER must be an absolute path` | При первой установке добавить одну запись `GIT_FOLDER=<существующий абсолютный корень проектов>`, например `C:\Git`, либо явно передать `-SnapshotRoots`. |
-| `SnapshotRoots cannot be empty`; `At least one snapshot root is required`; `Bootstrap JSON must specify at least one snapshot root` | Задать `GIT_FOLDER` или непустой `-SnapshotRoots`; при повторной установке проверить сохранённые корни в `service.json`. |
+| `exactly one GIT_FOLDER`; `GIT_FOLDER must be an absolute path` | Добавить одну запись `GIT_FOLDER=<существующий абсолютный корень проектов>`, например `C:\Git`, либо явно передать `-SnapshotRoots`. |
+| `SnapshotRoots cannot be empty`; `At least one snapshot root is required`; `Bootstrap JSON must specify at least one snapshot root` | Задать `GIT_FOLDER` или непустой `-SnapshotRoots`. |
 | `Directory path must be absolute`; `contains a file or reparse point`; `Snapshot root must be separate from Tracker storage` | Указать существующий обычный каталог абсолютным путём; не использовать ссылку и не пересекать его с Tracker. |
 | `Cannot grant Git safe.directory`; `detected dubious ownership` после повторной проверки | Проверить права чтения checkout, учётную запись запуска и доступ к её глобальной Git-конфигурации. Bootstrap доверяет только точному пути checkout. |
 | `Git check failed`; `checkout root differs`; `checkout must be on main`; `HEAD differs from local origin/main` | Проверить Git и правильный клон, перейти на `main`, синхронизировать его с локальным `origin/main`. |
