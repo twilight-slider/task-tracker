@@ -3,7 +3,6 @@ param([Parameter(Mandatory)][string]$ConfigPath)
 $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot 'TaskTracker-AdminCommon.ps1')
 . (Join-Path $PSScriptRoot 'TaskTracker-InstallLayout.ps1')
-. (Join-Path $PSScriptRoot 'TaskTracker-Marketplace.ps1')
 Assert-TrackerAdministrator
 if (-not (Test-AbsoluteWindowsPath $ConfigPath)) { throw 'ConfigPath must be absolute.' }
 $request = Read-TrackerUtf8File $ConfigPath | ConvertFrom-Json
@@ -104,7 +103,6 @@ $reuseExe = Test-TrackerHostReuse -PriorConfig $prior -SourceHash $hostHash -Exi
 $createdAccount = $false
 $createdService = $false
 $bootstrapUpdated = $false
-$pluginUpdateStarted = $false
 $wasRunning = $service -and $service.Status -eq 'Running'
 $switched = $false
 $preserveBackup = $false
@@ -175,11 +173,6 @@ function Assert-InstalledMcp([int]$Port, [string]$Token) {
 }
 try {
     New-Item -ItemType Directory -Path $stageBin, $backup -Force | Out-Null
-    $published = Join-Path $stage 'published-marketplace'
-    $git = (Get-Command git.exe -ErrorAction Stop).Source
-    & $git clone --quiet --depth=1 --single-branch --branch master ([string]$request.marketplaceSource) $published
-    if ($LASTEXITCODE -ne 0) { throw 'Cannot read published ai-marketplace. Publish the release before reinstalling.' }
-    Assert-TrackerPublishedMarketplace -Root $published -Port ([int]$request.mcpPort)
     & (Join-Path $repository 'scripts\Stage-PythonRuntime.ps1') -RuntimeRoot $stageRuntime | Out-Null
     foreach ($name in @('folder_worker.py', 'task_folder.py', 'result_snapshot_store.py', 'Set-TaskDirectoryAcl.ps1')) {
         Copy-Item -LiteralPath (Join-Path $repository "src\$name") -Destination $stageBin
@@ -284,27 +277,6 @@ try {
             Move-Item -LiteralPath $tempBootstrap -Destination $ConfigPath -Force
         } finally { if (Test-Path -LiteralPath $tempBootstrap) { Remove-Item -LiteralPath $tempBootstrap } }
     }
-    $pluginUpdateStarted = $true
-    $targetScript = Join-Path $repository 'scripts\Update-TaskTrackerMarketplace.ps1'
-    $currentSid = [Security.Principal.WindowsIdentity]::GetCurrent().User.Value
-    if ($currentSid -ceq $settings.TargetSid) {
-        & $targetScript -TargetUser ([string]$request.targetUser) -Port ([int]$request.mcpPort) | Out-Null
-    } else {
-        $credential = Get-Credential -UserName ([string]$request.targetUser) -Message 'Credentials for TargetUser Codex marketplace update'
-        if (-not $credential) { throw 'TargetUser credentials were not provided.' }
-        $stdout = Join-Path (Split-Path -Parent $settings.EnvPath) ('.tracker-marketplace-' + [guid]::NewGuid().ToString('N') + '.out')
-        $stderr = $stdout + '.err'
-        try {
-            $args = @('-NoProfile', '-File', "`"$targetScript`"", '-TargetUser', "`"$($request.targetUser)`"", '-Port', [string]$request.mcpPort)
-            $child = Start-Process -FilePath $pwsh -ArgumentList $args -Credential $credential -LoadUserProfile `
-                -WindowStyle Hidden -Wait -PassThru -RedirectStandardOutput $stdout -RedirectStandardError $stderr
-            if ($child.ExitCode -ne 0) { throw 'TargetUser Codex marketplace update failed.' }
-        } finally {
-            foreach ($file in @($stdout, $stderr)) {
-                if (Test-Path -LiteralPath $file) { Remove-Item -LiteralPath $file -ErrorAction SilentlyContinue }
-            }
-        }
-    }
     $instructions = Join-Path $tasks 'AGENTS.md'
     if (-not (Test-Path -LiteralPath $instructions)) {
         $source = Join-Path $settings.TrackerRoot 'AGENTS.md'
@@ -374,13 +346,14 @@ try {
     if ($tokenRollbackFailure) {
         throw "RECOVERY_INCOMPLETE: installation failed ($failure); previous service restored where present, but MCP token rollback failed: $tokenRollbackFailure"
     }
-    if ($pluginUpdateStarted) {
-        $preserveBackup = $true
-        throw "RECOVERY_INCOMPLETE: installation failed ($failure); previous service restored where present, but TargetUser plugin state may have changed. Rollback files retained at $backup"
-    }
     throw "Installation failed; previous service restored where present: $failure"
 } finally {
     Remove-TrackerInstallTree -ProtectedRoot $protected -Path $stage
     if (-not $preserveBackup) { Remove-TrackerInstallTree -ProtectedRoot $protected -Path $backup }
 }
-Write-Output "Installed: $serviceName; EXE reused: $reuseExe; Python runtime: $($request.runtimeRoot); plugins updated; rollback retained: $backup"
+Write-Output "Installed: $serviceName; EXE reused: $reuseExe; Python runtime: $($request.runtimeRoot); Codex plugins unchanged; rollback retained: $backup"
+Write-Output "For $($request.targetUser): verify task-folder-workflow@ai-marketplace 0.6.1 and task-tracker-mcp@ai-marketplace 0.2.1; if already enabled, no action is needed."
+Write-Output "If ai-marketplace is missing: codex plugin marketplace add $($request.marketplaceSource)"
+Write-Output 'If versions are outdated: codex plugin marketplace upgrade ai-marketplace'
+Write-Output 'If missing: codex plugin add task-folder-workflow@ai-marketplace'
+Write-Output 'If missing: codex plugin add task-tracker-mcp@ai-marketplace'
