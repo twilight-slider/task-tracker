@@ -44,13 +44,10 @@ if ($ServiceAccountName -notmatch '^[\p{L}\p{N}._-]{1,20}$') {
     throw 'ServiceAccountName must be a Windows account name of at most 20 characters.'
 }
 $account = Get-LocalUser -Name $ServiceAccountName -ErrorAction SilentlyContinue
-$installedConfig = Join-Path $protected 'service.json'
 if ($PSBoundParameters.ContainsKey('SnapshotRoots')) {
     $snapshotRootsToInstall = @($SnapshotRoots)
-} elseif (Test-Path -LiteralPath $installedConfig -PathType Leaf) {
-    $snapshotRootsToInstall = @((Read-TrackerUtf8File $installedConfig | ConvertFrom-Json).snapshotRoots | Where-Object { $_ })
 } else {
-    throw 'First installation requires -SnapshotRoots <absolute project root>. Rerun bootstrap with at least one allowed root.'
+    $snapshotRootsToInstall = @((Read-GitFolderFromEnv -EnvPath $settings.EnvPath))
 }
 if ($snapshotRootsToInstall.Count -eq 0) { throw 'SnapshotRoots cannot be empty.' }
 $snapshotRootsToInstall = @(Assert-TrackerSnapshotRoots -Roots $snapshotRootsToInstall -TrackerRoot $tracker)

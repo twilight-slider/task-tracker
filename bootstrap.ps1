@@ -14,9 +14,7 @@ if ($PSBoundParameters.ContainsKey('SnapshotRoots') -and @($SnapshotRoots).Count
 }
 if (-not $PSBoundParameters.ContainsKey('SnapshotRoots')) {
     $settings = Get-TargetTrackerSettings -TargetUser $TargetUser
-    if (-not (Test-Path -LiteralPath (Join-Path $settings.TrackerRoot '.protected\service.json') -PathType Leaf)) {
-        $PSBoundParameters['SnapshotRoots'] = @((Read-GitFolderFromEnv -EnvPath $settings.EnvPath))
-    }
+    $PSBoundParameters['SnapshotRoots'] = @((Read-GitFolderFromEnv -EnvPath $settings.EnvPath))
 }
 & (Join-Path $PSScriptRoot 'scripts\Prepare-TrackerRoot.ps1') -TargetUser $TargetUser `
     -TrustAuthenticatedUsers:$TrustAuthenticatedUsers
