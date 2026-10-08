@@ -392,10 +392,11 @@ internal sealed class PersistentWorker : IDisposable
         Reset();
         var next = new Process();
         next.StartInfo = new ProcessStartInfo(pythonPath,
-            "-I \"" + scriptPath + "\" \"" + configPath + "\"") {
+            "-I -X utf8 \"" + scriptPath + "\" \"" + configPath + "\"") {
             WorkingDirectory = Path.GetDirectoryName(scriptPath),
             UseShellExecute = false, CreateNoWindow = true,
-            RedirectStandardInput = true, RedirectStandardOutput = true, RedirectStandardError = true
+            RedirectStandardInput = true, RedirectStandardOutput = true, RedirectStandardError = true,
+            StandardOutputEncoding = new UTF8Encoding(false, true)
         };
         next.ErrorDataReceived += (sender, args) => { /* Drain stderr without recording secrets. */ };
         try {
@@ -414,8 +415,9 @@ internal sealed class PersistentWorker : IDisposable
             StartIfNeeded();
             try {
                 var deadline = DateTime.UtcNow.AddMilliseconds(timeoutMs);
-                Wait(process.StandardInput.WriteLineAsync(request), deadline);
-                Wait(process.StandardInput.FlushAsync(), deadline);
+                var input = new UTF8Encoding(false, true).GetBytes(request + "\n");
+                Wait(process.StandardInput.BaseStream.WriteAsync(input, 0, input.Length), deadline);
+                Wait(process.StandardInput.BaseStream.FlushAsync(), deadline);
                 var output = process.StandardOutput.ReadLineAsync();
                 Wait(output, deadline);
                 var response = output.Result;

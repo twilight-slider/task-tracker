@@ -28,9 +28,33 @@ for line in sys.stdin:
         continue
     if method == "sleep":
         time.sleep(2)
+    if method == "unicode":
+        print(json.dumps({"ok": True, "data": {"text": "Ответ 東京 مرحبا 🚀 café"}}, ensure_ascii=False), flush=True)
+        continue
     print(json.dumps({"ok": True, "data": {"pid": os.getpid(), "method": method,
                                     "isolated": sys.flags.isolated, "version": VERSION}}), flush=True)
 '@ | Set-Content -LiteralPath $worker -Encoding UTF8
+$realWorker = Join-Path $testRoot 'folder_worker_test.py'
+@'
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[4] / "src"))
+from task_folder import FolderStore
+from folder_worker import main
+
+FolderStore._secure = lambda self, task: None  # Isolated fixture has no service ACL.
+main()
+'@ | Set-Content -LiteralPath $realWorker -Encoding UTF8
+$trackerRoot = Join-Path $testRoot 'Tracker'
+$tasksRoot = Join-Path $trackerRoot 'tasks'
+$protectedRoot = Join-Path $trackerRoot '.protected'
+New-Item -ItemType Directory -Path $tasksRoot, $protectedRoot -Force | Out-Null
+$realConfig = Join-Path $testRoot 'worker-config.json'
+@{ schemaVersion = 1; trackerRoot = $trackerRoot; tasksRoot = $tasksRoot; protectedRoot = $protectedRoot; snapshotRoots = @($repo) } |
+    ConvertTo-Json -Depth 4 | Set-Content -LiteralPath $realConfig -Encoding UTF8
+@{ schema_version = 1; projects = @(@{ project_key = 'TEST'; source_type = 'NO_JIRA'; next_issue_number = 1 }) } |
+    ConvertTo-Json -Depth 4 | Set-Content -LiteralPath (Join-Path $trackerRoot 'projects.json') -Encoding UTF8
 $source = Join-Path $testRoot 'PersistentWorkerTest.cs'
 $exe = Join-Path $testRoot 'PersistentWorkerTest.exe'
 @'
@@ -38,6 +62,7 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Security.Cryptography;
+using System.Text;
 using System.Threading.Tasks;
 using System.Web.Script.Serialization;
 
@@ -115,6 +140,20 @@ internal static class PersistentWorkerTest
             Pid(worker, "fourth");
             Fails(worker, "sleep");
             Pid(worker, "fifth");
+            var unicode = Json.Deserialize<Dictionary<string, object>>(worker.Call("{\"method\":\"unicode\",\"arguments\":{}}"));
+            if ((string)((Dictionary<string, object>)unicode["data"])["text"] != "Ответ 東京 مرحبا 🚀 café")
+                throw new Exception("Python stdout changed Unicode text.");
+        }
+        using (var worker = new PersistentWorker(args[0], args[4], args[5], 5000)) {
+            var request = "{\"method\":\"create_local_task_folder\",\"arguments\":{\"project_key\":\"TEST\",\"title\":\"Заголовок 東京 🚀 café\",\"statement\":\"Описание مرحبا नमस्ते 中文 😀\"}}";
+            var response = Json.Deserialize<Dictionary<string, object>>(worker.Call(request));
+            if (!(bool)response["ok"]) throw new Exception("Unicode task creation failed: " + response["code"]);
+            var data = (Dictionary<string, object>)response["data"];
+            var expectedTask = "# Заголовок 東京 🚀 café" + Environment.NewLine + Environment.NewLine +
+                "Описание مرحبا नमस्ते 中文 😀" + Environment.NewLine;
+            if ((string)data["key"] != "TEST-1" ||
+                File.ReadAllText((string)data["sourceReference"], Encoding.UTF8) != expectedTask)
+                throw new Exception("Created task.md does not preserve Unicode text.");
         }
         File.WriteAllText(args[1], File.ReadAllText(args[1]).Replace("VERSION = \"one\"", "VERSION = \"two\""));
         ExpectedVersion = "two";
@@ -143,7 +182,7 @@ internal static class PersistentWorkerTest
 }
 '@ | Set-Content -LiteralPath $source -Encoding UTF8
 $csc = Join-Path ([Environment]::GetFolderPath([Environment+SpecialFolder]::Windows)) 'Microsoft.NET\Framework64\v4.0.30319\csc.exe'
-& $csc /nologo /target:exe /main:PersistentWorkerTest "/out:$exe" /reference:System.ServiceProcess.dll /reference:System.Web.Extensions.dll (Join-Path $repo 'src\ServiceHost.cs') $source
+& $csc /nologo /codepage:65001 /target:exe /main:PersistentWorkerTest "/out:$exe" /reference:System.ServiceProcess.dll /reference:System.Web.Extensions.dll (Join-Path $repo 'src\ServiceHost.cs') $source
 if ($LASTEXITCODE -ne 0) { throw 'Persistent worker test did not compile.' }
-& $exe $python $worker $testRoot $exe
+& $exe $python $worker $testRoot $exe $realWorker $realConfig
 if ($LASTEXITCODE -ne 0) { throw 'Persistent worker test failed.' }

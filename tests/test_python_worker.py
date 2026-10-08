@@ -165,6 +165,21 @@ class WorkerContracts(unittest.TestCase):
             "project_key": "LOCAL", "title": "", "statement": "Invalid"})["code"], "TASK_PATH_INVALID")
         self.assertEqual(call("get_task_projects", {})["data"]["manifest"], before)
 
+    def test_invalid_utf8_does_not_consume_task_number(self):
+        request = b'{"method":"create_local_task_folder","arguments":{"project_key":"TEST","title":"\xc4","statement":"x"}}\n'
+        run = subprocess.run([sys.executable, "-I", str(ROOT / "src" / "folder_worker.py"), str(self.config)],
+                             input=request, capture_output=True, cwd=ROOT)
+        self.assertEqual(run.returncode, 0, run.stderr)
+        response = json.loads(run.stdout)
+        self.assertEqual(response["code"], "INVALID_REQUEST")
+        self.assertIn("UTF-8", response["message"])
+        self.assertEqual(json.loads((self.tracker / "projects.json").read_text(encoding="utf-8"))
+                         ["projects"][0]["next_issue_number"], 2)
+        self.assertFalse(list((self.tracker / "tasks").glob("*/TEST-2")))
+        with patch.object(FolderStore, "_secure", return_value=None):
+            self.assertEqual(self.worker.call("create_local_task_folder", {
+                "project_key": "TEST", "title": "Valid", "statement": "Valid"})["key"], "TEST-2")
+
     def test_folder_creation_and_jira_host_contract(self):
         with patch.object(FolderStore, "_secure", return_value=None):
             local = self.worker.call("create_local_task_folder", {"project_key": "TEST", "title": "Заголовок", "statement": "Описание"})
