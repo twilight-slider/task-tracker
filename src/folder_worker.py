@@ -84,9 +84,11 @@ class Worker:
             if len(line) > MAX_REQUEST:
                 raise FolderError("REQUEST_TOO_LARGE", "Request too large")
             try:
-                request = json.loads(line)
+                request = json.loads(line.decode("utf-8"))
             except UnicodeDecodeError as error:
                 raise FolderError("INVALID_REQUEST", "Request must be UTF-8") from error
+            except json.JSONDecodeError as error:
+                raise FolderError("INVALID_REQUEST", "Request must be valid JSON") from error
             if (not isinstance(request, dict) or not isinstance(request.get("method"), str) or
                 not isinstance(request.get("arguments"), dict)):
                 raise FolderError("INVALID_REQUEST", "Unknown method or invalid arguments")

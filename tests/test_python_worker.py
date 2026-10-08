@@ -177,6 +177,11 @@ class WorkerContracts(unittest.TestCase):
         response = json.loads(run.stdout)
         self.assertEqual(response["code"], "INVALID_REQUEST")
         self.assertIn("UTF-8", response["message"])
+        request_text = json.dumps({"method": "create_local_task_folder", "arguments": {
+            "project_key": "TEST", "title": "invalid encoding", "statement": "invalid encoding"}})
+        with patch.object(FolderStore, "_secure", return_value=None):
+            self.assertEqual(self.worker.handle(request_text.encode("utf-16"))["code"], "INVALID_REQUEST")
+            self.assertEqual(self.worker.handle(b"\xef\xbb\xbf" + request_text.encode("utf-8"))["code"], "INVALID_REQUEST")
         self.assertEqual(json.loads((self.tracker / "projects.json").read_text(encoding="utf-8"))
                          ["projects"][0]["next_issue_number"], 2)
         self.assertFalse(list((self.tracker / "tasks").glob("*/TEST-2")))
