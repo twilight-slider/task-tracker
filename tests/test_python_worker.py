@@ -133,6 +133,10 @@ class WorkerContracts(unittest.TestCase):
         made = create_snapshot(str(self.task), str(self.project))
         self.assertEqual(py["files"], made["files"])
         self.assertEqual(py["fingerprint"], made["fingerprint"])
+        with patch.dict(os.environ, {"GIT_TEST_ASSUME_DIFFERENT_OWNER": "1"}):
+            probe = subprocess.run(["git", "rev-parse", "--show-toplevel"], cwd=self.project, capture_output=True)
+            self.assertNotEqual(probe.returncode, 0, "Git ownership simulation is unavailable")
+            self.assertEqual(current_snapshot(str(self.project))["project"]["mode"], "git")
 
     def test_folder_error_and_manifest_parity(self):
         self.assertEqual(FolderStore.jira_origin("https://[::1]:0"), "https://[::1]:0")

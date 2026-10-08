@@ -46,7 +46,15 @@ def _relative(root: Path, file: Path) -> str:
 
 
 def _git(cwd: Path, *args: str, allow_failure: bool = False) -> bytes | None:
-    result = subprocess.run(["git", *args], cwd=cwd, capture_output=True, check=False)
+    command = ["git"]
+    for repository in (cwd, *cwd.parents):
+        marker = repository / ".git"
+        if marker.exists():
+            if _reparse(marker):
+                raise SnapshotError("UNSUPPORTED_FILE_TYPE", "Symbolic links are not supported")
+            command.extend(["-c", f"safe.directory={repository.as_posix()}"])
+            break
+    result = subprocess.run([*command, *args], cwd=cwd, capture_output=True, check=False)
     if result.returncode:
         if allow_failure:
             return None
