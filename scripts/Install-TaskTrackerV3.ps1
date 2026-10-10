@@ -354,7 +354,7 @@ try {
     if (-not $preserveBackup) { Remove-TrackerInstallTree -ProtectedRoot $protected -Path $backup }
 }
 Write-Output "Installed: $serviceName; EXE reused: $reuseExe; Python runtime: $($request.runtimeRoot); Codex plugins unchanged; rollback retained: $backup"
-Write-Output "For $($request.targetUser): verify task-folder-workflow@ai-marketplace 0.6.1 and task-tracker-mcp@ai-marketplace 0.2.1; if already enabled, no action is needed."
+Write-Output "For $($request.targetUser): verify task-folder-workflow@ai-marketplace 0.6.2 and task-tracker-mcp@ai-marketplace 0.2.2; if already enabled, no action is needed."
 Write-Output "If ai-marketplace is missing: codex plugin marketplace add $($request.marketplaceSource)"
 Write-Output 'If versions are outdated: codex plugin marketplace upgrade ai-marketplace'
 Write-Output 'If missing: codex plugin add task-folder-workflow@ai-marketplace'

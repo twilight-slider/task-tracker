@@ -117,6 +117,28 @@ internal static class McpHttpTest
             Post(port, "folders", "test-token", "{\"jsonrpc\":\"2.0\",\"method\":\"notifications/initialized\"}", 202);
             if (calls != 2) throw new Exception("Unexpected worker calls: " + calls);
         }
+        int portA = FreePort();
+        int portB = FreePort();
+        while (portB == portA) portB = FreePort();
+        int callsA = 0;
+        int callsB = 0;
+        using (var serverA = new McpHttpServer(portA, "token-a", (method, toolArgs) => {
+            callsA++;
+            return new Dictionary<string, object> { { "ok", true }, { "data", "A" } };
+        }))
+        using (var serverB = new McpHttpServer(portB, "token-b", (method, toolArgs) => {
+            callsB++;
+            return new Dictionary<string, object> { { "ok", true }, { "data", "B" } };
+        })) {
+            serverA.Start();
+            serverB.Start();
+            const string call = "{\"jsonrpc\":\"2.0\",\"id\":7,\"method\":\"tools/call\",\"params\":{\"name\":\"get_tasks_folder\",\"arguments\":{}}}";
+            Has(Post(portA, "folders", "token-a", call, 200), "\"tasksFolder\":\"A\"");
+            Has(Post(portB, "folders", "token-b", call, 200), "\"tasksFolder\":\"B\"");
+            Post(portA, "folders", "token-b", call, 401);
+            Post(portB, "folders", "token-a", call, 401);
+            if (callsA != 1 || callsB != 1) throw new Exception("Cross-token request reached a worker.");
+        }
         Console.WriteLine("HTTP MCP auth, scopes and calls passed");
         return 0;
     }

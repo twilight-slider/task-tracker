@@ -9,11 +9,29 @@ $csc = Join-Path ([Environment]::GetFolderPath([Environment+SpecialFolder]::Wind
 if ($LASTEXITCODE -ne 0) { throw 'Service host did not compile.' }
 & icacls.exe $protected /grant '*S-1-5-11:(F)' | Out-Null
 if ($LASTEXITCODE -ne 0) { throw 'Could not create the test ACL drift.' }
-$assembly = [Reflection.Assembly]::LoadFrom($exe)
-$repair = $assembly.GetType('ProtectedRootAcl', $true).GetMethod('Repair', [Reflection.BindingFlags]'Static, NonPublic')
 $configPath = [string](Join-Path $protected 'service.json')
-$repair.Invoke($null, [object[]]@($configPath)) | Out-Null
-$repair.Invoke($null, [object[]]@($configPath)) | Out-Null
+$probeSource = Join-Path $testRoot 'AclProbe.cs'
+$probeExe = Join-Path $testRoot 'AclProbe.exe'
+@'
+using System;
+using System.Reflection;
+
+internal static class AclProbe
+{
+    private static int Main(string[] args)
+    {
+        var assembly = Assembly.LoadFrom(args[0]);
+        var repair = assembly.GetType("ProtectedRootAcl", true).GetMethod("Repair", BindingFlags.Static | BindingFlags.NonPublic);
+        repair.Invoke(null, new object[] { args[1] });
+        repair.Invoke(null, new object[] { args[1] });
+        return 0;
+    }
+}
+'@ | Set-Content -LiteralPath $probeSource -Encoding utf8
+& $csc /nologo /target:exe "/out:$probeExe" $probeSource
+if ($LASTEXITCODE -ne 0) { throw 'ACL probe did not compile.' }
+& $probeExe $exe $configPath
+if ($LASTEXITCODE -ne 0) { throw 'Service host ACL repair failed.' }
 $acl = Get-Acl -LiteralPath $protected
 $serviceSid = [Security.Principal.WindowsIdentity]::GetCurrent().User.Value
 $allowed = @('S-1-5-18', 'S-1-5-32-544', $serviceSid)

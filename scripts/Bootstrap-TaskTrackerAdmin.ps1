@@ -1,6 +1,7 @@
 param(
     [Parameter(Mandatory)][string]$TargetUser,
     [string]$ServiceAccountName,
+    [int]$McpPort,
     [string[]]$SnapshotRoots,
     [switch]$TrustAuthenticatedUsers
 )
@@ -22,8 +23,29 @@ if (-not (Test-Path -LiteralPath $protected -PathType Container)) {
 }
 $serviceSid = $null
 $installed = Join-Path $protected 'service.json'
+$existingPort = $null
 if (Test-Path -LiteralPath $installed -PathType Leaf) {
-    try { $serviceSid = [string]((Read-TrackerUtf8File $installed | ConvertFrom-Json).serviceAccountSid) } catch { }
+    $installedConfig = Read-TrackerUtf8File $installed | ConvertFrom-Json
+    $serviceSid = [string]$installedConfig.serviceAccountSid
+    $existingPort = [int]$installedConfig.mcpPort
+    if ($existingPort -lt 1 -or $existingPort -gt 65535) { throw 'Installed MCP port is invalid.' }
+}
+if ($PSBoundParameters.ContainsKey('McpPort') -and ($McpPort -lt 1 -or $McpPort -gt 65535)) { throw 'McpPort must be between 1 and 65535.' }
+if ($existingPort -and $PSBoundParameters.ContainsKey('McpPort') -and $McpPort -ne $existingPort) {
+    throw 'Reinstall must preserve the installed MCP port.'
+}
+$McpPort = if ($existingPort) { $existingPort } elseif ($PSBoundParameters.ContainsKey('McpPort')) { $McpPort } else { 38772 }
+if ($McpPort -lt 1 -or $McpPort -gt 65535) { throw 'Installed MCP port is invalid.' }
+foreach ($otherService in @(Get-CimInstance Win32_Service -Filter "Name LIKE 'TaskTracker-%'" -ErrorAction Stop)) {
+    if ($otherService.Name -ceq "TaskTracker-$($settings.TargetSid.Split('-')[-1])") { continue }
+    if ($otherService.PathName -notmatch '--config\s+"([^"]+)"') { throw "Cannot verify MCP port of $($otherService.Name)." }
+    $otherConfig = Read-TrackerUtf8File $Matches[1] | ConvertFrom-Json
+    if ([int]$otherConfig.mcpPort -lt 1 -or [int]$otherConfig.mcpPort -gt 65535) { throw "Invalid MCP port of $($otherService.Name)." }
+    if ([int]$otherConfig.mcpPort -eq $McpPort) { throw "MCP port $McpPort belongs to $($otherService.Name)." }
+}
+if (-not $existingPort -and @([Net.NetworkInformation.IPGlobalProperties]::GetIPGlobalProperties().GetActiveTcpListeners() |
+    Where-Object { $_.Port -eq $McpPort }).Count -gt 0) {
+    throw "MCP port $McpPort is already in use. Choose a free personal port."
 }
 if ($serviceSid -and $installedServiceSid -and $serviceSid -cne $installedServiceSid) { throw 'Installed service SID differs from service.json.' }
 Assert-TrackerProtectedArea -TrackerRoot $tracker -TargetSid $settings.TargetSid -ServiceSid $installedServiceSid | Out-Null
@@ -67,7 +89,7 @@ $config = [ordered]@{
     serviceAccountName = $ServiceAccountName
     serviceAccountSid = if ($installedServiceSid) { $installedServiceSid } elseif ($account) { $account.SID.Value } else { $serviceSid }
     pipeName = "task-tracker-$rid-v1"
-    mcpPort = 38772
+    mcpPort = $McpPort
     repositoryRoot = $repository
     repositoryCommit = $commit
     trustAuthenticatedUsers = [bool]$TrustAuthenticatedUsers

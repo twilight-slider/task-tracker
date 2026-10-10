@@ -1,4 +1,4 @@
-param([Parameter(Mandatory)][string]$TargetUser, [int]$Port = 38772)
+param([Parameter(Mandatory)][string]$TargetUser)
 
 $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot 'TaskTracker-AdminCommon.ps1')
@@ -7,7 +7,9 @@ $ErrorActionPreference = 'Stop'
 $settings = Get-TargetTrackerSettings -TargetUser $TargetUser
 $currentSid = [Security.Principal.WindowsIdentity]::GetCurrent().User.Value
 if ($currentSid -cne $settings.TargetSid) { throw 'Run marketplace update as TargetUser.' }
-$token = Get-TrackerEnvToken -EnvText (Read-TrackerUtf8File $settings.EnvPath)
+$envText = Read-TrackerUtf8File $settings.EnvPath
+$token = Get-TrackerEnvToken -EnvText $envText
+$Port = Get-TrackerEnvPort -EnvText $envText
 if ([string]::IsNullOrWhiteSpace($token)) { throw 'TargetUser env.txt has no TRACKER_MCP_TOKEN.' }
 $env:TRACKER_MCP_TOKEN = $token
 $codex = (Get-Command codex -ErrorAction Stop).Source
@@ -25,11 +27,11 @@ $marketplace = @($marketplaces.marketplaces | Where-Object { $_.name -ceq 'ai-ma
 if ((Get-TrackerMarketplaceRegistrationAction -MarketplaceList $marketplaces) -cne 'upgrade') {
     throw 'Codex ai-marketplace was not registered after update.'
 }
-Assert-TrackerPublishedMarketplace -Root ([string]$marketplace[0].root) -Port $Port
+Assert-TrackerPublishedMarketplace -Root ([string]$marketplace[0].root)
 $plugins = & $codex plugin list --json | ConvertFrom-Json
 if ($LASTEXITCODE -ne 0) { throw 'Codex plugin list failed.' }
-foreach ($entry in @(@{ Name = 'task-folder-workflow'; Version = '0.6.1' },
-        @{ Name = 'task-tracker-mcp'; Version = '0.2.1' })) {
+foreach ($entry in @(@{ Name = 'task-folder-workflow'; Version = '0.6.2' },
+        @{ Name = 'task-tracker-mcp'; Version = '0.2.2' })) {
     $installed = @($plugins.installed | Where-Object { $_.pluginId -ceq "$($entry.Name)@ai-marketplace" })
     if ($installed.Count -ne 1 -or $installed[0].version -cne $entry.Version -or -not $installed[0].enabled) {
         & $codex plugin add "$($entry.Name)@ai-marketplace" --json | Out-Null

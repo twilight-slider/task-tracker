@@ -28,4 +28,22 @@ foreach ($pair in @(
 $rejected = $false
 try { Get-TrackerEnvToken -EnvText "TRACKER_MCP_TOKEN=a`nTRACKER_MCP_TOKEN=b`n" | Out-Null } catch { $rejected = $true }
 if (-not $rejected) { throw 'Duplicate token entries were accepted.' }
+foreach ($port in @(0, 1, 38772, 65535, 65536)) {
+    if ($port -ge 1 -and $port -le 65535) {
+        $text = Set-TrackerEnvPort -EnvText $envText -Port $port
+        if ((Get-TrackerEnvPort -EnvText $text) -ne $port) { throw 'MCP port roundtrip failed.' }
+    } else {
+        $rejected = $false
+        try { Set-TrackerEnvPort -EnvText $envText -Port $port | Out-Null } catch { $rejected = $true }
+        if (-not $rejected) { throw 'Invalid MCP port was accepted.' }
+    }
+}
+$rejected = $false
+try { Get-TrackerEnvPort -EnvText "TRACKER_MCP_PORT=38772`nTRACKER_MCP_PORT=38773`n" | Out-Null } catch { $rejected = $true }
+if (-not $rejected) { throw 'Duplicate MCP ports were accepted.' }
+foreach ($text in @('TRACKER_MCP_TOKEN=x', 'TRACKER_MCP_PORT=abc', 'TRACKER_MCP_PORT=65536')) {
+    $rejected = $false
+    try { Get-TrackerEnvPort -EnvText $text | Out-Null } catch { $rejected = $true }
+    if (-not $rejected) { throw 'Invalid MCP port entry was accepted.' }
+}
 Write-Output 'MCP token create, preserve, rotate and mismatch checks passed'

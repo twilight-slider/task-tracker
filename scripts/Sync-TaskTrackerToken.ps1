@@ -23,6 +23,7 @@ $protected = Assert-TrackerProtectedArea -TrackerRoot $settings.TrackerRoot -Tar
 $protectedToken = Join-Path $protected 'mcp-token'
 $envFile = $settings.EnvPath
 $envText = Read-TrackerUtf8File $envFile
+$envTextWithPort = Set-TrackerEnvPort -EnvText $envText -Port ([int]$config.mcpPort)
 $envToken = Get-TrackerEnvToken -EnvText $envText
 $protectedExists = Test-Path -LiteralPath $protectedToken -PathType Leaf
 if ($protectedExists) {
@@ -33,11 +34,12 @@ $protectedValue = if ($protectedExists) { (Read-TrackerUtf8File $protectedToken)
 Assert-TrackerTokenPair -ProtectedToken $protectedValue -EnvToken $envToken
 if ($Rotate -and -not $protectedValue) { throw 'Cannot rotate an absent MCP token; run initial installation first.' }
 if ($protectedValue -and -not $Rotate) {
+    if ($envTextWithPort -cne $envText) { [IO.File]::WriteAllText($envFile, $envTextWithPort, [Text.UTF8Encoding]::new($false)) }
     Write-Output 'MCP token preserved and both copies match.'
     return
 }
 $newToken = New-TrackerMcpToken
-$newEnv = Set-TrackerEnvToken -EnvText $envText -Token $newToken
+$newEnv = Set-TrackerEnvToken -EnvText $envTextWithPort -Token $newToken
 $service = $null
 $port = 0
 if ($Rotate) {
