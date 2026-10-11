@@ -4,6 +4,9 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
+$repo = Split-Path -Parent $PSScriptRoot
+. (Join-Path $repo 'scripts\TaskTracker-AdminCommon.ps1')
+. (Join-Path $repo 'scripts\TaskTracker-TokenCore.ps1')
 $sid = [Security.Principal.WindowsIdentity]::GetCurrent().User.Value
 $ownServiceName = 'TaskTracker-' + $sid.Split('-')[-1]
 if ($OtherServiceName -notmatch '^TaskTracker-\d+$' -or $OtherServiceName -eq $ownServiceName) {
@@ -11,23 +14,12 @@ if ($OtherServiceName -notmatch '^TaskTracker-\d+$' -or $OtherServiceName -eq $o
 }
 
 $envPath = Join-Path $env:USERPROFILE '.env\env.txt'
-$lines = [IO.File]::ReadAllLines($envPath)
-function Get-Setting([string]$name) {
-    $values = @($lines | Where-Object { $_.StartsWith("$name=", [StringComparison]::Ordinal) })
-    if ($values.Count -ne 1 -or $values[0].Length -eq $name.Length + 1) {
-        throw "Expected exactly one nonempty $name in the current user's env file."
-    }
-    return $values[0].Substring($name.Length + 1)
-}
-
-$ownPortText = Get-Setting 'TRACKER_MCP_PORT'
-if ($ownPortText -notmatch '^[0-9]+$') { throw 'TRACKER_MCP_PORT is invalid.' }
-$ownPort = 0
-if (-not [int]::TryParse($ownPortText, [ref]$ownPort) -or $ownPort -lt 1 -or $ownPort -gt 65535 -or $ownPort -eq $OtherPort) {
-    throw 'The two services must have distinct valid MCP ports.'
-}
-$token = Get-Setting 'TRACKER_MCP_TOKEN'
-$tasksRoot = Join-Path (Get-Setting 'TRACKER_FOLDER') 'tasks'
+$envText = Read-TrackerUtf8File $envPath
+$ownPort = Get-TrackerEnvPort $envText
+if ($ownPort -eq $OtherPort) { throw 'The two services must have distinct MCP ports.' }
+$token = Get-TrackerEnvToken $envText
+if (-not $token) { throw 'TRACKER_MCP_TOKEN is missing or empty.' }
+$tasksRoot = Join-Path (Read-TrackerFolderFromEnv $envPath) 'tasks'
 
 foreach ($name in @($ownServiceName, $OtherServiceName)) {
     $service = Get-Service -Name $name -ErrorAction Stop
