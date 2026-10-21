@@ -248,6 +248,12 @@ try {
         workerLanguage = 'python'; mcpPort = [int]$request.mcpPort
         pwshPath = $pwsh; snapshotRoots = $snapshotRoots; hostSourceSha256 = $hostHash
     }
+    if ($request.mcpWslAddress) {
+        $wslInterface = Get-NetIPAddress -AddressFamily IPv4 -IPAddress ([string]$request.mcpWslAddress) -ErrorAction SilentlyContinue |
+            Where-Object { $_.InterfaceAlias -match 'WSL' }
+        if (-not $wslInterface) { throw 'MCP WSL address is no longer on the WSL interface.' }
+        $config.mcpWslAddress = [string]$request.mcpWslAddress
+    }
     $newConfig = ($config | ConvertTo-Json -Depth 5) + "`n"
     [IO.File]::WriteAllText((Join-Path $stage 'service.json'), $newConfig, [Text.UTF8Encoding]::new($false))
 

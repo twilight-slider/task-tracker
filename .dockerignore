@@ -1,0 +1,6 @@
+.git
+.runtime
+.venv
+tests
+docs
+scripts

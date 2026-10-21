@@ -1,0 +1,15 @@
+{
+  "description": "Ponytail 5.3.2 hooks for isolated Codex agents; review in /hooks before use.",
+  "hooks": {
+    "SessionStart": [{
+      "matcher": "startup|resume|clear|compact|fork",
+      "hooks": [{"type": "command", "command": "env PLUGIN_DATA=/home/agent/.codex/ponytail-data node /opt/agent-bundle/ponytail/hooks/ponytail-activate.js", "timeout": 15}]
+    }],
+    "SubagentStart": [{
+      "hooks": [{"type": "command", "command": "env PLUGIN_DATA=/home/agent/.codex/ponytail-data node /opt/agent-bundle/ponytail/hooks/ponytail-subagent.js", "timeout": 15}]
+    }],
+    "UserPromptSubmit": [{
+      "hooks": [{"type": "command", "command": "env PLUGIN_DATA=/home/agent/.codex/ponytail-data node /opt/agent-bundle/ponytail/hooks/ponytail-mode-tracker.js", "timeout": 15}]
+    }]
+  }
+}

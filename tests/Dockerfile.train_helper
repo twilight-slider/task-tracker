@@ -1,0 +1,10 @@
+FROM task-tracker-agent:user-plugins-t8
+USER 0:0
+COPY src/train_driver_supervisor.mjs /usr/local/bin/train-driver-supervisor.mjs
+COPY src/train_driver_proxy.mjs /usr/local/bin/train-driver-proxy.mjs
+COPY src/agent_entrypoint.sh /usr/local/bin/agent-entrypoint
+COPY src/agent_env_launcher.mjs /usr/local/bin/agent-env-launcher.mjs
+COPY src/train_helper_mcp.json /opt/agent-bundle/marketplaces/ai-marketplace/plugins/train-driver/.mcp.json
+RUN chmod 0755 /usr/local/bin/agent-entrypoint
+USER 1000:1000
+ENTRYPOINT ["/usr/local/bin/agent-entrypoint"]

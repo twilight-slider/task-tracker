@@ -2,6 +2,7 @@ param(
     [Parameter(Mandatory)][string]$TargetUser,
     [string]$ServiceAccountName,
     [int]$McpPort,
+    [string]$McpWslAddress,
     [string[]]$SnapshotRoots,
     [switch]$TrustAuthenticatedUsers
 )

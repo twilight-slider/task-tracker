@@ -31,9 +31,9 @@ internal static class McpHttpTest
     }
 
     private static string Post(int port, string scope, string token, string body, int status,
-        string host = null, string origin = null)
+        string host = null, string origin = null, string address = "127.0.0.1")
     {
-        var request = (HttpWebRequest)WebRequest.Create("http://127.0.0.1:" + port + "/mcp/" + scope);
+        var request = (HttpWebRequest)WebRequest.Create("http://" + address + ":" + port + "/mcp/" + scope);
         request.Method = "POST";
         request.ContentType = "application/json";
         if (host != null) request.Host = host;
@@ -111,11 +111,14 @@ internal static class McpHttpTest
             Has(Post(port, "folders", "test-token", init, 200), "serverInfo");
             Has(Post(port, "folders", "test-token", "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/list\"}", 200), "get_tasks_folder");
             Has(Post(port, "snapshots", "test-token", "{\"jsonrpc\":\"2.0\",\"id\":3,\"method\":\"tools/list\"}", 200), "create_result_snapshot");
+            Has(Post(port, "jobs", "test-token", "{\"jsonrpc\":\"2.0\",\"id\":8,\"method\":\"tools/list\"}", 200), "start");
             Has(Post(port, "folders", "test-token", "{\"jsonrpc\":\"2.0\",\"id\":4,\"method\":\"tools/call\",\"params\":{\"name\":\"get_tasks_folder\",\"arguments\":{}}}", 200), "get_tasks_folder");
             Has(Post(port, "snapshots", "test-token", "{\"jsonrpc\":\"2.0\",\"id\":5,\"method\":\"tools/call\",\"params\":{\"name\":\"compare_result_snapshot\",\"arguments\":{}}}", 200), "compare_result_snapshot");
             Has(Post(port, "folders", "test-token", "{\"jsonrpc\":\"2.0\",\"id\":6,\"method\":\"tools/call\",\"params\":{\"name\":\"compare_result_snapshot\",\"arguments\":{}}}", 200), "UNKNOWN_TOOL");
+            Has(Post(port, "jobs", "test-token", "{\"jsonrpc\":\"2.0\",\"id\":9,\"method\":\"tools/call\",\"params\":{\"name\":\"status\",\"arguments\":{}}}", 200), "status");
+            Has(Post(port, "folders", "test-token", "{\"jsonrpc\":\"2.0\",\"id\":10,\"method\":\"tools/call\",\"params\":{\"name\":\"start\",\"arguments\":{}}}", 200), "UNKNOWN_TOOL");
             Post(port, "folders", "test-token", "{\"jsonrpc\":\"2.0\",\"method\":\"notifications/initialized\"}", 202);
-            if (calls != 2) throw new Exception("Unexpected worker calls: " + calls);
+            if (calls != 3) throw new Exception("Unexpected worker calls: " + calls);
         }
         int portA = FreePort();
         int portB = FreePort();
@@ -138,6 +141,14 @@ internal static class McpHttpTest
             Post(portA, "folders", "token-b", call, 401);
             Post(portB, "folders", "token-a", call, 401);
             if (callsA != 1 || callsB != 1) throw new Exception("Cross-token request reached a worker.");
+        }
+        int portWsl = FreePort();
+        using (var server = new McpHttpServer(portWsl, "test-token", (method, toolArgs) =>
+            new Dictionary<string, object> { { "ok", true }, { "data", "reachable" } },
+            IPAddress.Parse("127.0.0.2"))) {
+            server.Start();
+            Has(Post(portWsl, "jobs", "test-token", "{\"jsonrpc\":\"2.0\",\"id\":11,\"method\":\"tools/call\",\"params\":{\"name\":\"status\",\"arguments\":{}}}",
+                     200, "127.0.0.1:" + portWsl, null, "127.0.0.2"), "reachable");
         }
         Console.WriteLine("HTTP MCP auth, scopes and calls passed");
         return 0;

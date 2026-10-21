@@ -2,6 +2,7 @@ param(
     [Parameter(Mandatory)][string]$TargetUser,
     [string]$ServiceAccountName,
     [int]$McpPort,
+    [string]$McpWslAddress,
     [string[]]$SnapshotRoots,
     [switch]$TrustAuthenticatedUsers
 )
@@ -24,10 +25,12 @@ if (-not (Test-Path -LiteralPath $protected -PathType Container)) {
 $serviceSid = $null
 $installed = Join-Path $protected 'service.json'
 $existingPort = $null
+$existingWslAddress = $null
 if (Test-Path -LiteralPath $installed -PathType Leaf) {
     $installedConfig = Read-TrackerUtf8File $installed | ConvertFrom-Json
     $serviceSid = [string]$installedConfig.serviceAccountSid
     $existingPort = [int]$installedConfig.mcpPort
+    $existingWslAddress = [string]$installedConfig.mcpWslAddress
     if ($existingPort -lt 1 -or $existingPort -gt 65535) { throw 'Installed MCP port is invalid.' }
 }
 if ($PSBoundParameters.ContainsKey('McpPort') -and ($McpPort -lt 1 -or $McpPort -gt 65535)) { throw 'McpPort must be between 1 and 65535.' }
@@ -35,6 +38,12 @@ if ($existingPort -and $PSBoundParameters.ContainsKey('McpPort') -and $McpPort -
     throw 'Reinstall must preserve the installed MCP port.'
 }
 $McpPort = if ($existingPort) { $existingPort } elseif ($PSBoundParameters.ContainsKey('McpPort')) { $McpPort } else { 38772 }
+$McpWslAddress = if ($PSBoundParameters.ContainsKey('McpWslAddress')) { $McpWslAddress } else { $existingWslAddress }
+if ($McpWslAddress) {
+    $wslInterface = Get-NetIPAddress -AddressFamily IPv4 -IPAddress $McpWslAddress -ErrorAction SilentlyContinue |
+        Where-Object { $_.InterfaceAlias -match 'WSL' }
+    if (-not $wslInterface) { throw 'McpWslAddress must be an IPv4 address of the Windows WSL interface.' }
+}
 if ($McpPort -lt 1 -or $McpPort -gt 65535) { throw 'Installed MCP port is invalid.' }
 foreach ($otherService in @(Get-CimInstance Win32_Service -Filter "Name LIKE 'TaskTracker-%'" -ErrorAction Stop)) {
     if ($otherService.Name -ceq "TaskTracker-$($settings.TargetSid.Split('-')[-1])") { continue }
@@ -90,6 +99,7 @@ $config = [ordered]@{
     serviceAccountSid = if ($installedServiceSid) { $installedServiceSid } elseif ($account) { $account.SID.Value } else { $serviceSid }
     pipeName = "task-tracker-$rid-v1"
     mcpPort = $McpPort
+    mcpWslAddress = $McpWslAddress
     repositoryRoot = $repository
     repositoryCommit = $commit
     trustAuthenticatedUsers = [bool]$TrustAuthenticatedUsers

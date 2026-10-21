@@ -1,0 +1,8 @@
+FROM python:3.11-bookworm
+
+WORKDIR /app
+COPY src/folder_worker.py src/task_folder.py src/result_snapshot_store.py src/job_queue.py src/docker_controller.py src/linux_mcp.py /app/
+USER 1000:1000
+EXPOSE 38772
+ENTRYPOINT ["python", "-I", "/app/linux_mcp.py"]
+CMD ["--config", "/config/service.json", "--token-file", "/config/mcp-token"]
