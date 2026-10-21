@@ -2,6 +2,7 @@
 
 import json
 import os
+from http.server import BaseHTTPRequestHandler, HTTPServer
 from concurrent.futures import ProcessPoolExecutor
 from pathlib import Path
 import shutil
@@ -10,6 +11,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from threading import Thread
 from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -105,6 +107,42 @@ class WorkerContracts(unittest.TestCase):
         self.config.write_text(json.dumps(config), encoding="utf-8")
         self.assertEqual(self.worker.handle(json.dumps({"method": "get_tasks_folder", "arguments": {}}).encode())["code"],
                          "TASK_FOLDER_CONFIG_INVALID")
+
+    def test_jobs_forward_to_wsl_backend_with_service_token(self):
+        seen = {}
+
+        class Backend(BaseHTTPRequestHandler):
+            def do_POST(self):
+                seen["path"] = self.path
+                seen["host"] = self.headers["Host"]
+                seen["authorization"] = self.headers["Authorization"]
+                seen["request"] = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
+                body = json.dumps({"result": {"structuredContent": {"status": "waiting", "result": "ok"}}}).encode()
+                self.send_response(200)
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+
+            def log_message(self, *_):
+                pass
+
+        server = HTTPServer(("127.0.0.1", 0), Backend)
+        self.addCleanup(server.server_close)
+        thread = Thread(target=server.handle_request, daemon=True)
+        thread.start()
+        token_file = self.tracker / ".protected" / "mcp-token"
+        token_file.parent.mkdir(exist_ok=True)
+        token_file.write_text("t" * 48, encoding="utf-8")
+        with patch("folder_worker.JOB_BACKEND_PORT", server.server_port):
+            response = self.worker.handle(json.dumps({"method": "status", "arguments": {
+                "job_id": "job", "control_key": "key"}}).encode())
+        thread.join(timeout=2)
+        self.assertEqual(response["data"], {"status": "waiting", "result": "ok"})
+        self.assertEqual(seen["path"], "/mcp/jobs")
+        self.assertEqual(seen["host"], f"127.0.0.1:{server.server_port}")
+        self.assertEqual(seen["authorization"], "Bearer " + "t" * 48)
+        self.assertEqual(seen["request"]["params"]["name"], "status")
+        self.assertIs(seen["request"]["params"]["arguments"]["summary_only"], True)
 
     def test_text_line_endings_and_changes(self):
         note = self.project / "note.txt"
@@ -232,6 +270,7 @@ class WorkerContracts(unittest.TestCase):
             self.assertEqual(self.worker.handle(json.dumps({"method": "create_task_subdirectory", "arguments": {
                 "key": "TEST-1", "relative_path": "input/reports"}}).encode())["code"], "TASK_ACL_FAILED")
 
+    @unittest.skipUnless(os.name == "nt", "Windows junction check")
     def test_windows_junction_is_rejected_as_snapshot_root_and_child(self):
         target = self.directory / "outside"
         target.mkdir()

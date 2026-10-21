@@ -1,0 +1,15 @@
+{
+  "mcpServers": {
+    "train-driver": {
+      "command": "node",
+      "args": ["/usr/local/bin/train-driver-proxy.mjs"],
+      "cwd": ".",
+      "enabled_tools": ["resolve_local_catalog", "get_train_run", "begin_execution",
+        "prepare_current_action", "save_train_run", "switch_train_run",
+        "manual_unblock_train_run", "manual_transfer_train_run", "manual_restart_train_run"],
+      "default_tools_approval_mode": "writes",
+      "startup_timeout_sec": 30,
+      "tool_timeout_sec": 30
+    }
+  }
+}

@@ -23,6 +23,7 @@ internal sealed class ServiceConfig
     internal string ConfigPath;
     internal string LogPath;
     internal int McpPort;
+    internal IPAddress McpWslAddress;
     internal string McpTokenPath;
     internal string PythonPath;
     internal string PythonScriptPath;
@@ -44,6 +45,14 @@ internal sealed class ServiceConfig
             throw new InvalidDataException("Python worker is required.");
         config.PythonPath = Path.Combine(Path.GetDirectoryName(config.ConfigPath), "runtime", "Scripts", "python.exe");
         config.PythonScriptPath = Path.Combine(config.InstallRoot ?? "", "folder_worker.py");
+        var wslAddress = field("mcpWslAddress");
+        if (wslAddress != null) {
+            IPAddress parsed;
+            if (!IPAddress.TryParse(wslAddress, out parsed) || parsed.AddressFamily != AddressFamily.InterNetwork ||
+                IPAddress.IsLoopback(parsed) || parsed.Equals(IPAddress.Any) || parsed.IsIPv6Multicast)
+                throw new InvalidDataException("Invalid WSL MCP bind address.");
+            config.McpWslAddress = parsed;
+        }
         if (String.IsNullOrWhiteSpace(config.ServiceName) || String.IsNullOrWhiteSpace(config.PipeName) ||
             String.IsNullOrWhiteSpace(config.ServiceSid) || String.IsNullOrWhiteSpace(config.AgentSid) ||
             !Path.IsPathRooted(config.InstallRoot) ||
@@ -98,20 +107,24 @@ internal sealed class McpHttpServer : IDisposable
     private readonly int port;
     private readonly byte[] token;
     private readonly Func<string, Dictionary<string, object>, Dictionary<string, object>> call;
+    private readonly IPAddress wslAddress;
     private readonly JavaScriptSerializer json = new JavaScriptSerializer();
     private TcpListener listener;
+    private TcpListener wslListener;
     private Thread thread;
+    private Thread wslThread;
     private volatile bool stopping;
     private int activeConnections;
 
     internal McpHttpServer(int port, string token,
-        Func<string, Dictionary<string, object>, Dictionary<string, object>> call)
+        Func<string, Dictionary<string, object>, Dictionary<string, object>> call, IPAddress wslAddress = null)
     {
         if (port < 1 || port > 65535 || String.IsNullOrWhiteSpace(token) || call == null)
             throw new ArgumentException("Invalid MCP HTTP configuration.");
         this.port = port;
         this.token = Encoding.UTF8.GetBytes(token);
         this.call = call;
+        this.wslAddress = wslAddress;
     }
 
     internal void Start()
@@ -120,26 +133,40 @@ internal sealed class McpHttpServer : IDisposable
         stopping = false;
         listener = new TcpListener(IPAddress.Loopback, port);
         listener.Start();
-        thread = new Thread(Listen) { IsBackground = true, Name = "TaskFolderMcpHttp" };
+        thread = new Thread(() => Listen(listener)) { IsBackground = true, Name = "TaskFolderMcpHttp" };
         thread.Start();
+        if (wslAddress != null) {
+            try {
+                wslListener = new TcpListener(wslAddress, port);
+                wslListener.Start();
+                wslThread = new Thread(() => Listen(wslListener)) { IsBackground = true, Name = "TaskFolderMcpWsl" };
+                wslThread.Start();
+            } catch (SocketException) {
+                wslListener = null; // WSL may not be ready when Windows starts; loopback remains available.
+            }
+        }
     }
 
     internal void Stop()
     {
         stopping = true;
         if (listener != null) listener.Stop();
+        if (wslListener != null) wslListener.Stop();
         if (thread != null && Thread.CurrentThread != thread) thread.Join(5000);
+        if (wslThread != null && Thread.CurrentThread != wslThread) wslThread.Join(5000);
         listener = null;
+        wslListener = null;
         thread = null;
+        wslThread = null;
     }
 
     public void Dispose() { Stop(); }
 
-    private void Listen()
+    private void Listen(TcpListener endpoint)
     {
         while (!stopping) {
             try {
-                var client = listener.AcceptTcpClient();
+                var client = endpoint.AcceptTcpClient();
                 if (Interlocked.Increment(ref activeConnections) > 16) {
                     Interlocked.Decrement(ref activeConnections);
                     client.Close();
@@ -183,6 +210,12 @@ internal sealed class McpHttpServer : IDisposable
 
     private static object[] Tools(string scope)
     {
+        if (scope == "jobs") return new object[] {
+            Tool("start", new[] { "thread_id", "prompt" }, "thread_id", "prompt", "task_key"),
+            Tool("status", new[] { "job_id", "control_key" }, "job_id", "control_key"),
+            Tool("reply", new[] { "job_id", "control_key", "reply" }, "job_id", "control_key", "reply"),
+            Tool("stop", new[] { "job_id", "control_key" }, "job_id", "control_key")
+        };
         if (scope == "snapshots") return new object[] {
             Tool("create_result_snapshot", new[] { "key", "project_root" }, "key", "project_root"),
             Tool("get_result_snapshot", new[] { "key", "snapshot_id" }, "key", "snapshot_id", "summary_only"),
@@ -304,7 +337,8 @@ internal sealed class McpHttpServer : IDisposable
             }
             if (!Authorized(authorization)) { Respond(stream, 401, null); return; }
             if (method != "POST") { Respond(stream, 405, null); return; }
-            var scope = path == "/mcp/folders" ? "folders" : path == "/mcp/snapshots" ? "snapshots" : null;
+            var scope = path == "/mcp/folders" ? "folders" : path == "/mcp/snapshots" ? "snapshots" :
+                path == "/mcp/jobs" ? "jobs" : null;
             if (scope == null) { Respond(stream, 404, null); return; }
             var requestBody = ReadBody(client, stream, deadline, length);
             var message = json.Deserialize<Dictionary<string, object>>(requestBody);
@@ -475,6 +509,7 @@ internal sealed class TaskFolderService : ServiceBase
     private NamedPipeServerStream currentPipe;
     private McpHttpServer http;
     private PersistentWorker pythonWorker;
+    private PersistentWorker jobsWorker;
     private volatile bool stopping;
 
     internal TaskFolderService(ServiceConfig config)
@@ -491,9 +526,12 @@ internal sealed class TaskFolderService : ServiceBase
             pythonWorker = new PersistentWorker(config.PythonPath, config.PythonScriptPath,
                 config.ConfigPath, 30000);
             pythonWorker.Start();
+            jobsWorker = new PersistentWorker(config.PythonPath, config.PythonScriptPath,
+                config.ConfigPath, 35000);
+            jobsWorker.Start();
             if (config.McpPort != 0) {
                 http = new McpHttpServer(config.McpPort,
-                    File.ReadAllText(config.McpTokenPath, Encoding.UTF8).Trim(), CallWorker);
+                    File.ReadAllText(config.McpTokenPath, Encoding.UTF8).Trim(), CallWorker, config.McpWslAddress);
                 http.Start();
             }
             listener = new Thread(Listen) { IsBackground = true, Name = "TaskFolderMcpPipe" };
@@ -501,6 +539,7 @@ internal sealed class TaskFolderService : ServiceBase
             Log("service started");
         } catch {
             if (http != null) http.Stop();
+            if (jobsWorker != null) jobsWorker.Stop();
             if (pythonWorker != null) pythonWorker.Stop();
             throw;
         }
@@ -510,6 +549,7 @@ internal sealed class TaskFolderService : ServiceBase
     {
         stopping = true;
         if (http != null) http.Stop();
+        if (jobsWorker != null) jobsWorker.Stop();
         if (pythonWorker != null) pythonWorker.Stop();
         lock (sync) {
             if (currentPipe != null) currentPipe.Dispose();
@@ -572,7 +612,9 @@ internal sealed class TaskFolderService : ServiceBase
             var request = new JavaScriptSerializer().Serialize(new Dictionary<string, object> {
                 { "method", method }, { "arguments", arguments }
             });
-            return new JavaScriptSerializer().Deserialize<Dictionary<string, object>>(RunWorker(request));
+            var jobs = method == "start" || method == "status" || method == "reply" || method == "stop";
+            return new JavaScriptSerializer().Deserialize<Dictionary<string, object>>(
+                jobs ? jobsWorker.Call(request) : RunWorker(request));
         } catch (Exception error) {
             Log("MCP worker error: " + error.GetType().Name + ": " + error.Message);
             return new Dictionary<string, object> { { "ok", false }, { "code", "SERVICE_ERROR" } };

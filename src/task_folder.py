@@ -42,9 +42,18 @@ class FolderStore:
             if (value.get("schemaVersion") not in (1, 2) or any(not os.path.isabs(value.get(k, "")) for k in
                 ("trackerRoot", "tasksRoot", "protectedRoot")) or
                 value["tasksRoot"] != str(Path(value["trackerRoot"], "tasks")) or
+                value.get("securityMode") not in (None, "linux-container") or
+                (value.get("securityMode") == "linux-container" and
+                 value["protectedRoot"] != str(Path(value["trackerRoot"], ".protected"))) or
                 ("pwshPath" in value and not os.path.isabs(value["pwshPath"])) or
                 any(not isinstance(root, str) or not os.path.isabs(root) for root in value.get("snapshotRoots", []))):
                 raise ValueError("invalid storage roots")
+            if value.get("securityMode") == "linux-container":
+                try:
+                    for name in ("trackerRoot", "tasksRoot", "protectedRoot"):
+                        self._plain_tree(Path(value[name]))
+                except (FolderError, OSError) as error:
+                    raise ValueError("invalid storage roots") from error
             return value
         except (OSError, ValueError, KeyError, TypeError) as error:
             raise FolderError("TASK_FOLDER_CONFIG_INVALID", "Service config has invalid storage roots") from error
@@ -160,6 +169,18 @@ class FolderStore:
 
     def _secure(self, task):
         config = self.config()
+        if config.get("securityMode") == "linux-container":
+            if os.name != "posix":
+                raise FolderError("TASK_FOLDER_CONFIG_INVALID", "Linux container security mode requires Linux")
+            # Agent isolation is enforced by selective mounts; chmod also protects native ext4 storage.
+            for private in (Path(config["protectedRoot"]), task / ".protected", task / "ai_actions"):
+                try:
+                    if is_reparse(private) or not private.is_dir():
+                        raise FolderError("TASK_ACL_FAILED", f"Not a plain private directory: {private}")
+                    private.chmod(0o700)
+                except OSError as error:
+                    raise FolderError("TASK_ACL_FAILED", str(error)) from error
+            return
         if not config.get("serviceAccountSid") or not config.get("agentSid"):
             raise FolderError("TASK_FOLDER_CONFIG_INVALID", "Service and agent SIDs are required")
         executable = config.get("pwshPath") or str(Path(os.environ.get("ProgramFiles", ""), "PowerShell", "7", "pwsh.exe"))
@@ -281,16 +302,21 @@ class FolderStore:
             result.update(jiraHost=project["jira_host"], sourceReference=f"{project['jira_host']}/browse/{quote(key)}")
         return result
 
-    def set_task_jira_host(self, key, jira_host):
+    def set_task_jira_host(self, key, jira_host, existing_only=False):
         try:
             host = self.jira_origin(jira_host)
         except ValueError as error:
             raise FolderError("JIRA_HOST_INVALID", str(error)) from error
-        result = self.create_task_folder(key)
+        result = self.resolve_task_folder(key) if existing_only else self.create_task_folder(key)
+        if existing_only and (not result.get("taskFolder") or result.get("sourceType") == "NO_JIRA"):
+            raise FolderError("TASK_PATH_INVALID", "Existing Jira task is required")
         if host != result["jiraHost"]:
             raise FolderError("JIRA_HOST_CONFLICT", "jira_host differs from registered project")
         task = Path(result["taskFolder"])
+        self._plain_tree(task)
         file = task / ".jira-host"
+        if file.is_symlink() or (file.exists() and is_reparse(file)):
+            raise FolderError("TASK_PATH_INVALID", "Jira host file must be plain")
         current = self.jira_origin(file.read_text(encoding="utf-8").strip()) if file.exists() else None
         if current != host:
             file.write_text(host + "\n", encoding="utf-8")
@@ -311,6 +337,7 @@ class FolderStore:
         if len(matches) != 1:
             raise FolderError("TASK_PATH_INVALID", "Task must exist in one year")
         task = matches[0][1]
+        self._plain_tree(task)
         parent = task
         for part in parts[:-1]:
             parent /= part
