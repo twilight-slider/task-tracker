@@ -281,6 +281,15 @@ class FolderStore:
             result.update(jiraHost=project["jira_host"], sourceReference=f"{project['jira_host']}/browse/{quote(key)}")
         return result
 
+    def ensure_task_acl(self, key):
+        result = self.resolve_task_folder(key)
+        if "taskFolder" not in result:
+            raise FolderError("TASK_PATH_INVALID", "Task folder must already exist")
+        task = Path(result["taskFolder"])
+        self._plain_tree(task)
+        self._secure(task)
+        return {"key": key, "taskFolder": str(task), "status": "secured"}
+
     def set_task_jira_host(self, key, jira_host):
         try:
             host = self.jira_origin(jira_host)

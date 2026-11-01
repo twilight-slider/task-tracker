@@ -15,7 +15,7 @@ from unittest.mock import patch
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 from folder_worker import Worker
-from task_folder import FolderStore
+from task_folder import FolderStore, FolderError
 from result_snapshot_store import SnapshotError, current_snapshot, create_snapshot, compare_snapshot
 
 
@@ -67,6 +67,20 @@ class WorkerContracts(unittest.TestCase):
                              input=data, capture_output=True, text=True, cwd=ROOT)
         self.assertEqual(run.returncode, 0, run.stderr)
         return [json.loads(line) for line in run.stdout.splitlines()]
+
+    def test_existing_task_acl_is_synchronous_and_does_not_create_tasks(self):
+        with patch.object(FolderStore, "_secure") as secure:
+            result = self.worker.call("ensure_task_acl", {"key": "TEST-1"})
+            secure.assert_called_once_with(self.task)
+            self.assertEqual(result["taskFolder"], str(self.task))
+        with patch.object(FolderStore, "_secure", side_effect=FolderError("TASK_ACL_FAILED", "denied")):
+            result = self.worker.handle(json.dumps({"method": "ensure_task_acl", "arguments": {"key": "TEST-1"}}).encode())
+            self.assertEqual(result["code"], "TASK_ACL_FAILED")
+        with patch.object(FolderStore, "_secure") as secure:
+            result = self.worker.handle(json.dumps({"method": "ensure_task_acl", "arguments": {"key": "TEST-999"}}).encode())
+            self.assertFalse(result["ok"])
+            secure.assert_not_called()
+            self.assertFalse((self.task.parent / "TEST-999").exists())
 
     def test_snapshot_fingerprint_and_read(self):
         (self.project / "utf-8.txt").write_bytes("\ufeffПривет\r\nмир\r\n\r\n".encode("utf-8"))

@@ -6,6 +6,8 @@ param(
 
 $ErrorActionPreference = 'Stop'
 $config = Get-Content -LiteralPath $ConfigPath -Raw | ConvertFrom-Json
+. (Join-Path $PSScriptRoot 'WorkspaceAgents.ps1')
+$matrix = @(Get-TrackerTaskAclMatrix $config)
 $tasksRoot = [IO.Path]::GetFullPath([string]$config.tasksRoot).TrimEnd('\')
 $task = [IO.Path]::GetFullPath($TaskFolder).TrimEnd('\')
 $relative = [IO.Path]::GetRelativePath($tasksRoot, $task)
@@ -17,13 +19,23 @@ if ($config.schemaVersion -ne 2 -or
 }
 $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
 $elevated = [Security.Principal.WindowsPrincipal]::new($identity).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
-if (($Migration -and -not $elevated) -or (-not $Migration -and $config.serviceAccountSid -ne $identity.User.Value)) {
+if (($Migration -and -not $elevated) -or
+    (-not $Migration -and -not $elevated -and $config.serviceAccountSid -ne $identity.User.Value)) {
     throw 'Task ACL changes require the service account or an elevated migration.'
 }
 $service = [Security.Principal.SecurityIdentifier]$config.serviceAccountSid
 $agent = [Security.Principal.SecurityIdentifier]$config.agentSid
 $system = [Security.Principal.SecurityIdentifier]'S-1-5-18'
 $admins = [Security.Principal.SecurityIdentifier]'S-1-5-32-544'
+
+$ancestor = $task
+while ($ancestor) {
+    $item = Get-Item -LiteralPath $ancestor -Force -ErrorAction Stop
+    if (-not $item.PSIsContainer -or ($item.Attributes -band [IO.FileAttributes]::ReparsePoint)) {
+        throw "Not a plain directory: $ancestor"
+    }
+    $ancestor = [IO.Path]::GetDirectoryName($ancestor)
+}
 
 function Set-TaskAcl([string]$path, [bool]$ordinary, [bool]$taskContent) {
     $item = Get-Item -LiteralPath $path -Force -ErrorAction Stop
@@ -36,16 +48,18 @@ function Set-TaskAcl([string]$path, [bool]$ordinary, [bool]$taskContent) {
     $acl.SetAccessRuleProtection($true, $false)
     if ($Migration) { $acl.SetOwner($service) }
     else { foreach ($rule in @($acl.Access)) { $acl.RemoveAccessRuleSpecific($rule) } }
-    foreach ($sid in @($system, $admins, $service)) {
-        $acl.AddAccessRule([Security.AccessControl.FileSystemAccessRule]::new(
-            $sid, 'FullControl', 'ContainerInherit, ObjectInherit', 'None', 'Allow'))
-    }
-    if ($ordinary) {
-        $rights = if ($taskContent) { 'ReadAndExecute, CreateFiles' } else { 'ReadAndExecute' }
-        $acl.AddAccessRule([Security.AccessControl.FileSystemAccessRule]::new($agent, $rights, 'None', 'None', 'Allow'))
-        if ($taskContent) {
+    foreach ($row in $matrix) {
+        $sid = [Security.Principal.SecurityIdentifier]$row.sid
+        if ($row.protectedDirectories) {
             $acl.AddAccessRule([Security.AccessControl.FileSystemAccessRule]::new(
-                $agent, 'FullControl', 'ObjectInherit', 'InheritOnly', 'Allow'))
+                $sid, $row.protectedDirectories, 'ContainerInherit, ObjectInherit', 'None', 'Allow'))
+        } elseif ($ordinary) {
+            $rights = if ($taskContent) { $row.taskDirectories } else { $row.treeDirectories }
+            $acl.AddAccessRule([Security.AccessControl.FileSystemAccessRule]::new($sid, $rights, 'None', 'None', 'Allow'))
+            if ($taskContent) {
+                $acl.AddAccessRule([Security.AccessControl.FileSystemAccessRule]::new(
+                    $sid, $row.taskFiles, 'ObjectInherit', 'InheritOnly', 'Allow'))
+            }
         }
     }
     try {
@@ -67,13 +81,29 @@ function Set-TaskAcl([string]$path, [bool]$ordinary, [bool]$taskContent) {
 }
 
 $year = [IO.Path]::GetDirectoryName($task)
+$ordinaryDirectories = [Collections.Generic.List[string]]::new()
+$privateDirectories = [Collections.Generic.List[string]]::new()
+$pending = [Collections.Generic.Stack[string]]::new()
+$pending.Push($task)
+while ($pending.Count) {
+    $path = $pending.Pop()
+    foreach ($dir in Get-ChildItem -LiteralPath $path -Directory -Force) {
+        if ($dir.Attributes -band [IO.FileAttributes]::ReparsePoint) { throw "Not a plain directory: $($dir.FullName)" }
+        $inside = [IO.Path]::GetRelativePath($task, $dir.FullName)
+        if (@($inside.Split('\') | Where-Object { $_ -ieq '.protected' }).Count) {
+            $privateDirectories.Add($dir.FullName)
+        } else { $ordinaryDirectories.Add($dir.FullName) }
+        $pending.Push($dir.FullName)
+    }
+}
+# Закрываем наследование новых private-каталогов до выдачи прав их родителям.
+foreach ($path in $privateDirectories) {
+    $privateAcl = Get-Acl -LiteralPath $path
+    if (-not $privateAcl.AreAccessRulesProtected) { Set-TaskAcl $path $false $false }
+}
 if (-not $Migration) {
     Set-TaskAcl $tasksRoot $true $false
     Set-TaskAcl $year $true $false
 }
 Set-TaskAcl $task $true $true
-foreach ($dir in Get-ChildItem -LiteralPath $task -Directory -Recurse -Force) {
-    $inside = [IO.Path]::GetRelativePath($task, $dir.FullName)
-    $protected = $inside -eq '.protected' -or $inside.StartsWith('.protected\', [StringComparison]::OrdinalIgnoreCase)
-    Set-TaskAcl $dir.FullName (-not $protected) (-not $protected)
-}
+foreach ($path in $ordinaryDirectories) { Set-TaskAcl $path $true $true }

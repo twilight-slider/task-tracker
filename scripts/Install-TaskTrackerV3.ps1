@@ -86,6 +86,8 @@ if ($prior -and [string]$prior.trackerRoot -ine $settings.TrackerRoot) {
 $snapshotRoots = @($request.snapshotRoots | Where-Object { $_ })
 if ($snapshotRoots.Count -eq 0) { throw 'Bootstrap JSON must specify at least one snapshot root.' }
 $snapshotRoots = @(Assert-TrackerSnapshotRoots -Roots $snapshotRoots -TrackerRoot $settings.TrackerRoot)
+. (Join-Path $repository 'src\WorkspaceAgents.ps1')
+$workspaceAgents = @(Get-TrackerWorkspaceAgents $request)
 $pwsh = (Get-Command pwsh.exe -ErrorAction Stop).Source
 $pwshFile = Get-Item -LiteralPath $pwsh -Force
 if ($pwshFile.Attributes -band [IO.FileAttributes]::ReparsePoint) { throw "Executable is a reparse point: $pwsh" }
@@ -127,7 +129,7 @@ function Grant-TrackerRight([string]$Path, [Security.Principal.SecurityIdentifie
     Set-Acl -LiteralPath $Path -AclObject $acl
 }
 function Set-TrackerDirectoryAcl([string]$Path, [Security.Principal.SecurityIdentifier]$ServiceSid,
-    [Security.Principal.SecurityIdentifier]$TargetSid, [bool]$IsRoot) {
+    [Security.Principal.SecurityIdentifier]$TargetSid, [bool]$IsRoot, [object[]]$TaskMatrix = @()) {
     Remember-TrackerAcl $Path
     $acl = Get-Acl -LiteralPath $Path
     $acl.SetAccessRuleProtection($true, $false)
@@ -138,12 +140,16 @@ function Set-TrackerDirectoryAcl([string]$Path, [Security.Principal.SecurityIden
             [Security.Principal.SecurityIdentifier]$sidValue, 'FullControl',
             'ContainerInherit, ObjectInherit', 'None', 'Allow'))
     }
-    if ($IsRoot) {
-        $acl.AddAccessRule([Security.AccessControl.FileSystemAccessRule]::new($TargetSid, 'ReadAndExecute', 'None', 'None', 'Allow'))
-        $acl.AddAccessRule([Security.AccessControl.FileSystemAccessRule]::new($TargetSid, 'ReadAndExecute', 'ContainerInherit', 'InheritOnly', 'Allow'))
-        $acl.AddAccessRule([Security.AccessControl.FileSystemAccessRule]::new($TargetSid, 'Read', 'ObjectInherit', 'InheritOnly', 'Allow'))
-    } else {
-        $acl.AddAccessRule([Security.AccessControl.FileSystemAccessRule]::new($TargetSid, 'ReadAndExecute', 'None', 'None', 'Allow'))
+    foreach ($reader in @($TargetSid) + @($workspaceAgents | ForEach-Object { [Security.Principal.SecurityIdentifier]$_.sid })) {
+        $rights = 'ReadAndExecute'
+        if (-not $IsRoot -and $TaskMatrix.Count) {
+            $rights = ($TaskMatrix | Where-Object sid -eq $reader.Value).treeDirectories
+        }
+        $acl.AddAccessRule([Security.AccessControl.FileSystemAccessRule]::new($reader, $rights, 'None', 'None', 'Allow'))
+        if ($IsRoot) {
+            $acl.AddAccessRule([Security.AccessControl.FileSystemAccessRule]::new($reader, 'ReadAndExecute', 'ContainerInherit', 'InheritOnly', 'Allow'))
+            $acl.AddAccessRule([Security.AccessControl.FileSystemAccessRule]::new($reader, 'Read', 'ObjectInherit', 'InheritOnly', 'Allow'))
+        }
     }
     Set-Acl -LiteralPath $Path -AclObject $acl
 }
@@ -158,6 +164,10 @@ function Protect-TrackerManifest([string]$Path, [Security.Principal.SecurityIden
     }
     $acl.AddAccessRule([Security.AccessControl.FileSystemAccessRule]::new(
         [Security.Principal.SecurityIdentifier]$settings.TargetSid, 'Read', 'Allow'))
+    foreach ($workspace in $workspaceAgents) {
+        $acl.AddAccessRule([Security.AccessControl.FileSystemAccessRule]::new(
+            [Security.Principal.SecurityIdentifier]$workspace.sid, 'Read', 'Allow'))
+    }
     Set-Acl -LiteralPath $Path -AclObject $acl
 }
 function Assert-InstalledMcp([int]$Port, [string]$Token) {
@@ -176,7 +186,7 @@ function Assert-InstalledMcp([int]$Port, [string]$Token) {
 try {
     New-Item -ItemType Directory -Path $stageBin, $backup -Force | Out-Null
     & (Join-Path $repository 'scripts\Stage-PythonRuntime.ps1') -RuntimeRoot $stageRuntime | Out-Null
-    foreach ($name in @('folder_worker.py', 'task_folder.py', 'result_snapshot_store.py', 'Set-TaskDirectoryAcl.ps1')) {
+    foreach ($name in @('folder_worker.py', 'task_folder.py', 'result_snapshot_store.py', 'Set-TaskDirectoryAcl.ps1', 'WorkspaceAgents.ps1')) {
         Copy-Item -LiteralPath (Join-Path $repository "src\$name") -Destination $stageBin
     }
     if ($reuseExe) {
@@ -219,6 +229,19 @@ try {
     $account.SID.GetBinaryForm($sidBytes, 0)
     [TaskFolderServiceLogonRight]::Grant($sidBytes) | Out-Null
     $sid = [Security.Principal.SecurityIdentifier]$account.SID.Value
+    $tasks = Join-Path $settings.TrackerRoot 'tasks'
+    $config = [ordered]@{
+        schemaVersion = 2; trackerRoot = $settings.TrackerRoot; tasksRoot = $tasks
+        protectedRoot = $protected; installRoot = (Join-Path $protected 'bin')
+        serviceName = $serviceName; serviceAccountSid = $account.SID.Value
+        agentSid = $settings.TargetSid; pipeName = [string]$request.pipeName
+        targetUser = $settings.TargetUser; serviceAccountName = $account.Name
+        workspaceAgents = @($workspaceAgents)
+        workerLanguage = 'python'; mcpPort = [int]$request.mcpPort
+        pwshPath = $pwsh; snapshotRoots = $snapshotRoots; hostSourceSha256 = $hostHash
+    }
+    $config.taskAclMatrix = @(New-TrackerTaskAclMatrix ([pscustomobject]$config) $prior)
+    $null = @(Get-TrackerTaskAclMatrix ([pscustomobject]$config))
     Set-TrackerDirectoryAcl -Path $settings.TrackerRoot -ServiceSid $sid `
         -TargetSid ([Security.Principal.SecurityIdentifier]$settings.TargetSid) -IsRoot $true
     Grant-TrackerRight -Path $protected -Sid $sid -Rights 'FullControl'
@@ -233,21 +256,13 @@ try {
         Grant-TrackerRight -Path $dir -Sid $sid -Rights 'FullControl'
     }
     Set-TrackerDirectoryAcl -Path $tasks -ServiceSid $sid `
-        -TargetSid ([Security.Principal.SecurityIdentifier]$settings.TargetSid) -IsRoot $false
+        -TargetSid ([Security.Principal.SecurityIdentifier]$settings.TargetSid) -IsRoot $false -TaskMatrix $config.taskAclMatrix
     $projects = Join-Path $settings.TrackerRoot 'projects.json'
     Remember-TrackerAcl $projects
     if (-not (Test-Path -LiteralPath $projects)) {
         [IO.File]::WriteAllText($projects, "{`"schema_version`":1,`"projects`":[]}`n", [Text.UTF8Encoding]::new($false))
     }
     Protect-TrackerManifest -Path $projects -ServiceSid $sid
-    $config = [ordered]@{
-        schemaVersion = 2; trackerRoot = $settings.TrackerRoot; tasksRoot = $tasks
-        protectedRoot = $protected; installRoot = (Join-Path $protected 'bin')
-        serviceName = $serviceName; serviceAccountSid = $account.SID.Value
-        agentSid = $settings.TargetSid; pipeName = [string]$request.pipeName
-        workerLanguage = 'python'; mcpPort = [int]$request.mcpPort
-        pwshPath = $pwsh; snapshotRoots = $snapshotRoots; hostSourceSha256 = $hostHash
-    }
     $newConfig = ($config | ConvertTo-Json -Depth 5) + "`n"
     [IO.File]::WriteAllText((Join-Path $stage 'service.json'), $newConfig, [Text.UTF8Encoding]::new($false))
 

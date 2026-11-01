@@ -3,6 +3,7 @@ param(
     [string]$ServiceAccountName,
     [int]$McpPort,
     [string[]]$SnapshotRoots,
+    [string[]]$WorkspaceAgentUsers,
     [switch]$TrustAuthenticatedUsers
 )
 
@@ -24,9 +25,11 @@ if (-not (Test-Path -LiteralPath $protected -PathType Container)) {
 $serviceSid = $null
 $installed = Join-Path $protected 'service.json'
 $existingPort = $null
+$existingWorkspaceAgents = @()
 if (Test-Path -LiteralPath $installed -PathType Leaf) {
     $installedConfig = Read-TrackerUtf8File $installed | ConvertFrom-Json
     $serviceSid = [string]$installedConfig.serviceAccountSid
+    $existingWorkspaceAgents = @($installedConfig.workspaceAgents | Where-Object { $null -ne $_ })
     $existingPort = [int]$installedConfig.mcpPort
     if ($existingPort -lt 1 -or $existingPort -gt 65535) { throw 'Installed MCP port is invalid.' }
 }
@@ -66,6 +69,14 @@ if ($ServiceAccountName -notmatch '^[\p{L}\p{N}._-]{1,20}$') {
     throw 'ServiceAccountName must be a Windows account name of at most 20 characters.'
 }
 $account = Get-LocalUser -Name $ServiceAccountName -ErrorAction SilentlyContinue
+. (Join-Path $repository 'src\WorkspaceAgents.ps1')
+$workspaceAgents = @(if ($PSBoundParameters.ContainsKey('WorkspaceAgentUsers')) {
+    @(Resolve-TrackerWorkspaceAgents -Users $WorkspaceAgentUsers)
+} else { $existingWorkspaceAgents })
+$workspaceAgents = @(Get-TrackerWorkspaceAgents ([pscustomobject]@{
+    workspaceAgents = @($workspaceAgents); agentSid = $settings.TargetSid
+    serviceAccountSid = if ($account) { $account.SID.Value } else { $installedServiceSid }
+}))
 if ($PSBoundParameters.ContainsKey('SnapshotRoots')) {
     $snapshotRootsToInstall = @($SnapshotRoots)
 } else {
@@ -79,6 +90,7 @@ $config = [ordered]@{
     targetUser = $TargetUser
     ownerSid = $settings.TargetSid
     agentSid = $settings.TargetSid
+    workspaceAgents = @($workspaceAgents)
     targetEnvPath = $settings.EnvPath
     trackerRoot = $tracker
     tasksRoot = (Join-Path $tracker 'tasks')

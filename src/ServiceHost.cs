@@ -194,6 +194,7 @@ internal sealed class McpHttpServer : IDisposable
             Tool("create_task_folder", new[] { "key" }, "key"),
             Tool("set_task_jira_host", new[] { "key", "jira_host" }, "key", "jira_host"),
             Tool("resolve_task_folder", new[] { "key" }, "key"),
+            Tool("ensure_task_acl", new[] { "key" }, "key"),
             Tool("register_task_project", new[] { "project_key", "source_type" },
                 "project_key", "name", "source_type", "jira_host"),
             Tool("create_local_task_folder", new[] { "project_key", "title", "statement" },
