@@ -116,6 +116,7 @@ if ($syntax.Extent.Text.Contains('Update-TaskTrackerMarketplace.ps1') -or
     -not $syntax.Extent.Text.Contains('Codex plugins unchanged')) {
     throw 'Installer must leave TargetUser Codex plugins unchanged.'
 }
+$workspaceAgents = @()
 Invoke-Expression $ownerFunction.Extent.Text
 function Remember-TrackerAcl([string]$Path) { }
 $script:aclResult = $null
@@ -148,6 +149,13 @@ $targetSid = [Security.Principal.SecurityIdentifier]'S-1-5-32-545'
 Set-TrackerDirectoryAcl -Path $ownerTest -ServiceSid $serviceSid -TargetSid $targetSid -IsRoot $false
 if ($script:aclResult.GetOwner([Security.Principal.SecurityIdentifier]).Value -cne $serviceSid.Value) {
     throw 'First-install tasks root was not assigned to the service SID.'
+}
+Set-TrackerDirectoryAcl -Path $ownerTest -ServiceSid $serviceSid -TargetSid $targetSid -IsRoot $false `
+    -TaskMatrix @([pscustomobject]@{ sid = $targetSid.Value; treeDirectories = 'Read' })
+$readerRules = @($script:aclResult.GetAccessRules($true, $false, [Security.Principal.SecurityIdentifier]) |
+    Where-Object { $_.IdentityReference.Value -eq $targetSid.Value })
+if ($readerRules.Count -ne 1 -or ($readerRules[0].FileSystemRights -band [Security.AccessControl.FileSystemRights]::ExecuteFile)) {
+    throw 'Installer widened the task-tree matrix row.'
 }
 Set-TrackerDirectoryAcl -Path $ownerTest -ServiceSid $serviceSid -TargetSid $targetSid -IsRoot $true
 if ($script:aclResult.GetOwner([Security.Principal.SecurityIdentifier]).Value -cne 'S-1-5-32-544') {

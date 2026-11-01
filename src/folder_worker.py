@@ -98,6 +98,8 @@ class Worker:
             return folder.resolve_task_folder(args.get("key"))
         if method == "create_local_task_folder":
             return folder.create_local_task_folder(args)
+        if method == "ensure_task_acl":
+            return folder.ensure_task_acl(args.get("key"))
         if method == "create_task_subdirectory":
             return folder.create_task_subdirectory(args.get("key"), args.get("relative_path"))
         if method == "create_result_snapshot":

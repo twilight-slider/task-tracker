@@ -4,6 +4,7 @@ param(
     [int]$McpPort,
     [string]$McpWslAddress,
     [string[]]$SnapshotRoots,
+    [string[]]$WorkspaceAgentUsers,
     [switch]$TrustAuthenticatedUsers
 )
 

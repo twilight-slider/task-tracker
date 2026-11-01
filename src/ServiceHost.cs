@@ -88,7 +88,8 @@ internal static class ProtectedRootAcl
         var serviceSid = WindowsIdentity.GetCurrent().User;
         var acl = new DirectorySecurity();
         acl.SetAccessRuleProtection(true, false);
-        acl.SetOwner(serviceSid);
+        if (!Directory.GetAccessControl(root).GetOwner(typeof(SecurityIdentifier)).Equals(serviceSid))
+            acl.SetOwner(serviceSid);
         foreach (var sid in new[] {
             new SecurityIdentifier("S-1-5-18"),
             new SecurityIdentifier("S-1-5-32-544"),
@@ -226,6 +227,7 @@ internal sealed class McpHttpServer : IDisposable
             Tool("create_task_folder", new[] { "key" }, "key"),
             Tool("set_task_jira_host", new[] { "key", "jira_host" }, "key", "jira_host"),
             Tool("resolve_task_folder", new[] { "key" }, "key"),
+            Tool("ensure_task_acl", new[] { "key" }, "key"),
             Tool("register_task_project", new[] { "project_key", "source_type" },
                 "project_key", "name", "source_type", "jira_host"),
             Tool("create_local_task_folder", new[] { "project_key", "title", "statement" },
@@ -500,6 +502,157 @@ internal sealed class PersistentWorker : IDisposable
     public void Dispose() { Stop(); }
 }
 
+internal sealed class CodexRunQueue
+{
+    internal sealed class Run
+    {
+        public string Id { get; set; }
+        public string RequestId { get; set; }
+        public string RequestHash { get; set; }
+        public string Status { get; set; }
+        public string CreatedUtc { get; set; }
+        public string UpdatedUtc { get; set; }
+    }
+
+    private sealed class State
+    {
+        public int Version { get; set; }
+        public List<Run> Runs { get; set; }
+    }
+
+    private readonly object gate = new object();
+    private readonly string path;
+    private readonly int maxPending;
+    private readonly SemaphoreSlim slots;
+    private readonly List<Run> runs;
+    private readonly Dictionary<string, Run> runsById = new Dictionary<string, Run>(StringComparer.Ordinal);
+    private readonly Dictionary<string, Run> runsByRequest = new Dictionary<string, Run>(StringComparer.Ordinal);
+    private readonly JavaScriptSerializer json = new JavaScriptSerializer { MaxJsonLength = Int32.MaxValue };
+
+    internal CodexRunQueue(string path, int parallelism, int maxPending)
+    {
+        if (!Path.IsPathRooted(path) || parallelism < 1 || maxPending < parallelism)
+            throw new ArgumentException("Invalid run queue configuration.");
+        this.path = path;
+        this.maxPending = maxPending;
+        slots = new SemaphoreSlim(parallelism, parallelism);
+        if (File.Exists(path)) {
+            var state = json.Deserialize<State>(File.ReadAllText(path, Encoding.UTF8));
+            if (state == null || state.Version != 1 || state.Runs == null)
+                throw new InvalidDataException("Unsupported run queue state.");
+            runs = state.Runs;
+        } else runs = new List<Run>();
+        bool recovered = false;
+        foreach (var run in runs) {
+            if (run == null || String.IsNullOrWhiteSpace(run.Id) || runsById.ContainsKey(run.Id) ||
+                (run.RequestId == null) != (run.RequestHash == null) ||
+                (run.RequestId != null && (String.IsNullOrWhiteSpace(run.RequestId) ||
+                    String.IsNullOrWhiteSpace(run.RequestHash) || runsByRequest.ContainsKey(run.RequestId))) ||
+                (run.Status != "queued" && run.Status != "running" &&
+                 run.Status != "completed" && run.Status != "failed" && run.Status != "needs_attention"))
+                throw new InvalidDataException("Invalid run queue record.");
+            runsById.Add(run.Id, run);
+            if (run.RequestId != null) runsByRequest.Add(run.RequestId, run);
+            if (run.Status == "queued" || run.Status == "running") {
+                run.Status = "needs_attention";
+                run.UpdatedUtc = DateTimeOffset.UtcNow.ToString("o");
+                recovered = true;
+            }
+        }
+        if (recovered) Save(); // An interrupted turn must never be replayed automatically.
+    }
+
+    internal string Start(string requestId, string requestHash, Func<string, Task> execute)
+    {
+        if (execute == null) throw new ArgumentNullException("execute");
+        if (String.IsNullOrWhiteSpace(requestId) || requestId.Length > 128 ||
+            requestHash == null || requestHash.Length != 64)
+            throw new ArgumentException("Invalid run request identity.");
+        foreach (var c in requestHash)
+            if (!((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f')))
+                throw new ArgumentException("Request hash must be lowercase SHA-256 hex.");
+        Run run;
+        lock (gate) {
+            Run previous;
+            if (runsByRequest.TryGetValue(requestId, out previous)) {
+                if (previous.RequestHash != requestHash)
+                    throw new InvalidOperationException("Request ID was already used with different parameters.");
+                return previous.Id;
+            }
+            int pending = 0;
+            foreach (var item in runs) if (item.Status == "queued" || item.Status == "running") pending++;
+            if (pending >= maxPending) throw new InvalidOperationException("Run queue is full.");
+            var now = DateTimeOffset.UtcNow.ToString("o");
+            run = new Run { Id = Guid.NewGuid().ToString("N"), RequestId = requestId,
+                RequestHash = requestHash, Status = "queued",
+                CreatedUtc = now, UpdatedUtc = now };
+            runs.Add(run);
+            runsById.Add(run.Id, run);
+            runsByRequest.Add(requestId, run);
+            try { Save(); } catch { runs.Remove(run); runsById.Remove(run.Id); runsByRequest.Remove(requestId); throw; }
+        }
+        Task.Run(() => Execute(run, execute));
+        return run.Id;
+    }
+
+    private async Task Execute(Run run, Func<string, Task> execute)
+    {
+        bool entered = false;
+        try {
+            await slots.WaitAsync();
+            entered = true;
+            lock (gate) { run.Status = "running"; run.UpdatedUtc = DateTimeOffset.UtcNow.ToString("o"); Save(); }
+            try { await execute(run.Id); }
+            catch {
+                lock (gate) { run.Status = "failed"; run.UpdatedUtc = DateTimeOffset.UtcNow.ToString("o"); Save(); }
+                return;
+            }
+            lock (gate) { run.Status = "completed"; run.UpdatedUtc = DateTimeOffset.UtcNow.ToString("o"); Save(); }
+        } catch {
+            lock (gate) {
+                run.Status = "needs_attention";
+                run.UpdatedUtc = DateTimeOffset.UtcNow.ToString("o");
+                try { Save(); } catch { /* The previous durable state also recovers as needs_attention. */ }
+            }
+        } finally { if (entered) slots.Release(); }
+    }
+
+    internal Run Get(string id)
+    {
+        lock (gate) {
+            Run run;
+            return id != null && runsById.TryGetValue(id, out run) ? Copy(run) : null;
+        }
+    }
+
+    internal Run[] List()
+    {
+        lock (gate) {
+            var result = new Run[runs.Count];
+            for (int i = 0; i < runs.Count; i++) result[i] = Copy(runs[i]);
+            return result;
+        }
+    }
+
+    private static Run Copy(Run run)
+    {
+        return new Run { Id = run.Id, Status = run.Status,
+            CreatedUtc = run.CreatedUtc, UpdatedUtc = run.UpdatedUtc };
+    }
+
+    private void Save()
+    {
+        // shortcut: rewrite the full history; use a journal if retained runs make writes too slow.
+        Directory.CreateDirectory(Path.GetDirectoryName(path));
+        var temporary = path + "." + Guid.NewGuid().ToString("N") + ".tmp";
+        try {
+            File.WriteAllText(temporary, json.Serialize(new State { Version = 1, Runs = runs }), new UTF8Encoding(false));
+            if (File.Exists(path)) File.Replace(temporary, path, null);
+            else File.Move(temporary, path);
+        } finally { if (File.Exists(temporary)) File.Delete(temporary); }
+    }
+}
+
 internal sealed class TaskFolderService : ServiceBase
 {
     private readonly ServiceConfig config;
@@ -510,6 +663,7 @@ internal sealed class TaskFolderService : ServiceBase
     private McpHttpServer http;
     private PersistentWorker pythonWorker;
     private PersistentWorker jobsWorker;
+    private CodexRunQueue codexRuns;
     private volatile bool stopping;
 
     internal TaskFolderService(ServiceConfig config)
@@ -523,6 +677,7 @@ internal sealed class TaskFolderService : ServiceBase
     protected override void OnStart(string[] args)
     {
         try {
+            codexRuns = new CodexRunQueue(Path.Combine(Path.GetDirectoryName(config.ConfigPath), "codex-runs.json"), 2, 16);
             pythonWorker = new PersistentWorker(config.PythonPath, config.PythonScriptPath,
                 config.ConfigPath, 30000);
             pythonWorker.Start();
@@ -556,6 +711,22 @@ internal sealed class TaskFolderService : ServiceBase
         }
         if (listener != null) listener.Join(5000);
         Log("service stopped");
+    }
+
+    internal string StartCodexRun(string requestId, string requestHash, Func<string, Task> execute)
+    {
+        if (stopping || codexRuns == null) throw new InvalidOperationException("Service is not accepting runs.");
+        return codexRuns.Start(requestId, requestHash, execute);
+    }
+
+    internal CodexRunQueue.Run GetCodexRun(string id)
+    {
+        return codexRuns == null ? null : codexRuns.Get(id);
+    }
+
+    internal CodexRunQueue.Run[] ListCodexRuns()
+    {
+        return codexRuns == null ? new CodexRunQueue.Run[0] : codexRuns.List();
     }
 
     private PipeSecurity PipeAcl()

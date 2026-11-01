@@ -34,6 +34,8 @@ pwsh -NoProfile -File .\bootstrap.ps1 -TargetUser 'DOMAIN\User'
 
 Подробности: [административный bootstrap](docs/admin-bootstrap.md), [установка v3](docs/install-v3.md).
 
+Матрица прав учётных записей и применение при записи TRAINRUN: [политика прав задач](docs/task-acl-matrix.md).
+
 ## Схема прав
 
 - **Родительский каталог Tracker** принадлежит Administrators или SYSTEM. Другим учётным записям разрешён `Modify`, если он не сопровождается правами удаления дочерних объектов (`DeleteSubdirectoriesAndFiles`), смены ACL или владельца. Tracker не наследует права родителя. `-TrustAuthenticatedUsers` допускает и более широкие права родителя только при сознательном доверии этим пользователям.
