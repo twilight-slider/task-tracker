@@ -92,3 +92,22 @@ function Restore-TrackerServiceInstall([string]$ServiceName, [string]$ProtectedR
         -HadLive $HadLive -OldConfig $OldConfig
     if ($WasRunning) { Start-Service -Name $ServiceName -ErrorAction Stop }
 }
+
+function Copy-TrackerArsClient([string]$RepositoryRoot, [string]$Destination) {
+    $source = Join-Path $RepositoryRoot 'vendor/agent-runtime-client/0.1.0'
+    $manifest = Get-Content -LiteralPath (Join-Path $source 'client.lock.json') -Raw | ConvertFrom-Json
+    if ($manifest.schema_version -ne 1 -or $manifest.version -cne '0.1.0' -or $manifest.status -cne 'source-candidate' -or
+        @($manifest.files.PSObject.Properties).Count -ne 2 -or
+        $null -eq $manifest.files.PSObject.Properties['ars_client.py'] -or
+        $null -eq $manifest.files.PSObject.Properties['Ars.Client.ps1']) {
+        throw 'ARS SDK manifest is invalid.'
+    }
+    foreach ($name in @('ars_client.py','Ars.Client.ps1')) {
+        $file = Get-Item -LiteralPath (Join-Path $source $name) -Force
+        if ($file.PSIsContainer -or ($file.Attributes -band [IO.FileAttributes]::ReparsePoint) -or
+            (Get-FileHash -LiteralPath $file.FullName -Algorithm SHA256).Hash.ToLowerInvariant() -cne $manifest.files.$name) {
+            throw 'ARS SDK source checksum mismatch.'
+        }
+        Copy-Item -LiteralPath $file.FullName -Destination (Join-Path $Destination $name)
+    }
+}

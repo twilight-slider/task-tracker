@@ -1,0 +1,10 @@
+{
+  "schema_version": 1,
+  "version": "0.1.0",
+  "status": "source-candidate",
+  "canonical_repository": "ai-agent-containers",
+  "files": {
+    "ars_client.py": "0a78de88933848b4e3390a7ac6371da8bdb62625a7b015107f8c2d04d2932bc1",
+    "Ars.Client.ps1": "0cb9229ceabe89f82e5109059ac658e8eb020e43f9fbf520d6d72b1245b3a134"
+  }
+}

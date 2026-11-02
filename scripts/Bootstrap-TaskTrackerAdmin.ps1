@@ -3,6 +3,7 @@ param(
     [string]$ServiceAccountName,
     [int]$McpPort,
     [string]$McpWslAddress,
+    [string]$ArsJobsConfig,
     [string[]]$SnapshotRoots,
     [string[]]$WorkspaceAgentUsers,
     [switch]$TrustAuthenticatedUsers
@@ -118,6 +119,11 @@ $config = [ordered]@{
     snapshotRoots = $snapshotRootsToInstall
     marketplaceSource = 'https://github.com/twilight-slider/ai-marketplace.git'
 }
+if ($ArsJobsConfig) {
+    $source = Get-Item -LiteralPath $ArsJobsConfig -Force
+    if ($source.PSIsContainer -or $source.Length -gt 65536 -or ($source.Attributes -band [IO.FileAttributes]::ReparsePoint)) { throw 'ARS jobs config must be a small plain JSON file.' }
+    $config.arsJobs = [IO.File]::ReadAllText($source.FullName) | ConvertFrom-Json
+}
 $json = Join-Path $protected 'bootstrap.json'
 $wrapper = Join-Path $protected 'TaskTracker-AdminWrapper.ps1'
 $common = Join-Path $protected 'TaskTracker-AdminCommon.ps1'
@@ -129,7 +135,7 @@ foreach ($target in @($json, $wrapper, $common)) {
 }
 $temporary = Join-Path $protected ('.bootstrap-' + [guid]::NewGuid().ToString('N') + '.json')
 try {
-    [IO.File]::WriteAllText($temporary, (($config | ConvertTo-Json -Depth 5) + "`n"), [Text.UTF8Encoding]::new($false))
+    [IO.File]::WriteAllText($temporary, (($config | ConvertTo-Json -Depth 12) + "`n"), [Text.UTF8Encoding]::new($false))
     Move-Item -LiteralPath $temporary -Destination $json -Force
 } finally { if (Test-Path -LiteralPath $temporary) { Remove-Item -LiteralPath $temporary } }
 foreach ($entry in @(

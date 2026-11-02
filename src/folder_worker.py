@@ -47,6 +47,19 @@ class Worker:
         return data
 
     def job(self, method, args):
+        config = self.folder.config()
+        if config.get('arsJobs') is not None:
+            from ars_jobs import from_service, AdapterError
+            try:
+                if method == 'start':
+                    self.folder.resolve_task_folder(args.get('task_key'))
+                if getattr(self, '_ars_jobs', None) is None:
+                    self._ars_jobs = from_service(config)
+                if method == 'status':
+                    args = {**args, 'summary_only': True}
+                return self._ars_jobs.call(method, args)
+            except AdapterError as error:
+                raise FolderError(error.code, error.code) from None
         token = Path(self.folder.config()["protectedRoot"], "mcp-token").read_text(encoding="utf-8").strip()
         if method == "status":
             args = {**args, "summary_only": True}

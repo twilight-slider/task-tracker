@@ -214,7 +214,7 @@ internal sealed class McpHttpServer : IDisposable
         if (scope == "jobs") return new object[] {
             Tool("start", new[] { "thread_id", "prompt" }, "thread_id", "prompt", "task_key"),
             Tool("status", new[] { "job_id", "control_key" }, "job_id", "control_key"),
-            Tool("reply", new[] { "job_id", "control_key", "reply" }, "job_id", "control_key", "reply"),
+            Tool("reply", new[] { "job_id", "control_key", "reply" }, "job_id", "control_key", "reply", "idempotency_key"),
             Tool("stop", new[] { "job_id", "control_key" }, "job_id", "control_key")
         };
         if (scope == "snapshots") return new object[] {

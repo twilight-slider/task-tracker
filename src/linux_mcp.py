@@ -75,7 +75,7 @@ SNAPSHOTS = {
 JOBS = {
     "start": (("thread_id", "prompt"), ("thread_id", "prompt", "task_key")),
     "status": (("job_id", "control_key"), ("job_id", "control_key", "summary_only")),
-    "reply": (("job_id", "control_key", "reply"), ("job_id", "control_key", "reply")),
+    "reply": (("job_id", "control_key", "reply"), ("job_id", "control_key", "reply", "idempotency_key")),
     "stop": (("job_id", "control_key"), ("job_id", "control_key")),
     "update_repositories": (("job_id", "control_key", "repositories", "expected_rights_version"),
                             ("job_id", "control_key", "repositories", "expected_rights_version")),
