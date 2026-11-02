@@ -3,6 +3,7 @@ param(
     [string]$ServiceAccountName,
     [int]$McpPort,
     [string]$McpWslAddress,
+    [string]$ArsJobsConfig,
     [string[]]$SnapshotRoots,
     [string[]]$WorkspaceAgentUsers,
     [switch]$TrustAuthenticatedUsers

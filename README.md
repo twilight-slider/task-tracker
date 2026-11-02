@@ -91,3 +91,5 @@ pwsh -NoProfile -File .\bootstrap.ps1 -TargetUser 'DOMAIN\User'
 | `Installation failed; previous service restored`; `MCP token update rolled back` | Исправить исходную причину после двоеточия и повторить; прежнее состояние восстановлено. |
 | `RECOVERY_INCOMPLETE`; `SCM failed to delete`; `newly created service is still registered`; `Refusing to remove a path outside protected Tracker` | Не запускать повторную установку вслепую. Сохранить каталог `.rollback-*`, проверить пути, службу, токен, ACL и учётную запись вручную под администратором. |
 | `Unexpected Tracker root files remain` | Установщик возвращает прежнюю службу; проверить перечисленные файлы в корне. Он удаляет только известные старые файлы, неизвестные данные сохраняет. |
+
+Опциональный backend ARS и его отдельный deploy gate: [Windows jobs API](docs/windows-jobs-api.md#опциональный-backend-ars-i7-исходники). Это исходники candidate; установленная служба в I7 не обновлялась.

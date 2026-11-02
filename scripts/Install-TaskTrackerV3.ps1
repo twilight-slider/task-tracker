@@ -186,9 +186,10 @@ function Assert-InstalledMcp([int]$Port, [string]$Token) {
 try {
     New-Item -ItemType Directory -Path $stageBin, $backup -Force | Out-Null
     & (Join-Path $repository 'scripts\Stage-PythonRuntime.ps1') -RuntimeRoot $stageRuntime | Out-Null
-    foreach ($name in @('folder_worker.py', 'task_folder.py', 'result_snapshot_store.py', 'Set-TaskDirectoryAcl.ps1', 'WorkspaceAgents.ps1')) {
+    foreach ($name in @('folder_worker.py', 'ars_jobs.py', 'task_folder.py', 'result_snapshot_store.py', 'Set-TaskDirectoryAcl.ps1', 'WorkspaceAgents.ps1')) {
         Copy-Item -LiteralPath (Join-Path $repository "src\$name") -Destination $stageBin
     }
+    Copy-TrackerArsClient -RepositoryRoot $repository -Destination $stageBin
     if ($reuseExe) {
         Copy-Item -LiteralPath $exe -Destination (Join-Path $stageBin 'TaskTrackerService.exe')
         if ((Get-FileHash -LiteralPath $exe -Algorithm SHA256).Hash -cne
@@ -204,7 +205,7 @@ try {
     $python = Join-Path $stageRuntime 'Scripts\python.exe'
     $probeScript = Join-Path $stageBin '.probe.py'
     [IO.File]::WriteAllText($probeScript,
-        "import sys`nfrom pathlib import Path`nsys.dont_write_bytecode = True`nsys.path.insert(0, str(Path(__file__).parent))`nimport folder_worker, task_folder, result_snapshot_store, yaml`n",
+        "import sys`nfrom pathlib import Path`nsys.dont_write_bytecode = True`nsys.path.insert(0, str(Path(__file__).parent))`nimport folder_worker, task_folder, result_snapshot_store, ars_jobs, ars_client, yaml`n",
         [Text.UTF8Encoding]::new($false))
     try {
         $probe = & $python -I $probeScript 2>&1
@@ -269,7 +270,20 @@ try {
         if (-not $wslInterface) { throw 'MCP WSL address is no longer on the WSL interface.' }
         $config.mcpWslAddress = [string]$request.mcpWslAddress
     }
-    $newConfig = ($config | ConvertTo-Json -Depth 5) + "`n"
+    $arsJobs = if ($request.PSObject.Properties.Name -contains 'arsJobs') { $request.arsJobs } elseif ($prior -and ($prior.PSObject.Properties.Name -contains 'arsJobs')) { $prior.arsJobs } else { $null }
+    if ($null -ne $arsJobs) {
+        if (-not ($arsJobs.PSObject.Properties.Name -contains 'credentialPath')) {
+            $profileKey = "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\ProfileList\$($account.SID.Value)"
+            $serviceProfile = [Environment]::ExpandEnvironmentVariables([string](Get-ItemProperty -LiteralPath $profileKey -ErrorAction Stop).ProfileImagePath)
+            $arsJobs | Add-Member -NotePropertyName credentialPath -NotePropertyValue (Join-Path $serviceProfile 'AppData/Local/AgentRuntimeClient/TaskTracker/client-token.dpapi')
+        }
+        $config.arsJobs = $arsJobs
+        $candidate = Join-Path $stage 'ars-jobs-config.json'
+        [IO.File]::WriteAllText($candidate, ($arsJobs | ConvertTo-Json -Depth 12))
+        & $python -I -c "import sys,json;sys.path.insert(0,sys.argv[1]);from ars_jobs import validate_config;validate_config(json.load(open(sys.argv[2],encoding='utf-8-sig')))" $stageBin $candidate
+        if ($LASTEXITCODE -ne 0) { throw 'ARS jobs config is invalid.' }
+    }
+    $newConfig = ($config | ConvertTo-Json -Depth 12) + "`n"
     [IO.File]::WriteAllText((Join-Path $stage 'service.json'), $newConfig, [Text.UTF8Encoding]::new($false))
 
     $switched = $true

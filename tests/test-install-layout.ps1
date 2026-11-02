@@ -228,3 +228,22 @@ if (-not (Test-Path -LiteralPath (Join-Path $base 'acl-called.txt') -PathType Le
 }
 
 Write-Output 'Layout, first task, owner, SCM rollback, token-pair and host reuse checks passed'
+
+# I7 candidate SDK is installed from the repository manifest, without a checkout runtime dependency.
+$clientStage=Join-Path $base 'ars-client-stage'
+New-Item -ItemType Directory -Path $clientStage | Out-Null
+Copy-TrackerArsClient -RepositoryRoot $repo -Destination $clientStage
+foreach ($name in @('ars_client.py','Ars.Client.ps1')) {
+    if (-not (Test-Path -LiteralPath (Join-Path $clientStage $name) -PathType Leaf)) {throw 'ARS SDK file was not staged.'}
+}
+$installer=[IO.File]::ReadAllText((Join-Path $repo 'scripts/Install-TaskTrackerV3.ps1'))
+foreach ($required in @('Copy-TrackerArsClient','ars_jobs.py','config.arsJobs','serviceProfile','ProfileList','credentialPath','validate_config')) {
+    if (-not $installer.Contains($required)) {throw 'ARS installer path is incomplete.'}
+}
+$bootstrap=[IO.File]::ReadAllText((Join-Path $repo 'bootstrap.ps1'))
+$admin=[IO.File]::ReadAllText((Join-Path $repo 'scripts/Bootstrap-TaskTrackerAdmin.ps1'))
+if (-not $bootstrap.Contains('[string]$ArsJobsConfig') -or -not $bootstrap.Contains('@PSBoundParameters') -or
+    -not $admin.Contains('$config.arsJobs =')) {throw 'ARS configuration is not forwarded by bootstrap.'}
+$hostSource=[IO.File]::ReadAllText((Join-Path $repo 'src/ServiceHost.cs'))
+if (-not $hostSource.Contains('"control_key", "reply", "idempotency_key"')) {throw 'Reply operation key is absent from the public tool.'}
+Write-Output 'I7 SDK staging and configured service identity path checks passed'

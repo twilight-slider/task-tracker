@@ -7,3 +7,14 @@ Windows `ServiceHost` принимает `start`, `status`, `reply`, `stop` на
 Контейнер Django обращается к Windows-службе через её дополнительную привязку `mcpWslAddress` к адресу интерфейса WSL. Адрес выбирает администратор параметром `-McpWslAddress` при bootstrap; привязка не открывает службу на всех интерфейсах. Брандмауэр Windows должен разрешить вход с WSL к этому точному адресу и порту. Без `mcpWslAddress` служба по-прежнему слушает только Windows `127.0.0.1`. Если адрес WSL изменится, loopback останется доступен, но адрес для контейнеров нужно обновить и перезапустить службу.
 
 Проверки исходного контракта: `tests/test-servicehost-mcp.ps1` проверяет авторизацию и область `/mcp/jobs`; `tests/test_python_worker.py` проверяет перенос Bearer-токена и результата к тестовому backend; `tests/test_windows_service_proxy.py` проверяет обратный вызов WSL → Windows и привязку задачи к выбранному `update`. Действующая служба не обновлена. Развёртывание выполняется позже по `AGENTS.md` через bootstrap из чистой `main` после проверки исходников, WSL-исполнителя и сетевых правил.
+
+
+## Опциональный backend ARS (I7, исходники)
+
+Bootstrap принимает -ArsJobsConfig с доверенным JSON: bindings (task key → C01 launch), port, expectedVersion, credentialPath и при необходимости startup с закреплённой task_name/agent_sid. Без настройки legacy backend сохраняется. Установщик переносит собственный source candidate SDK 0.1.0 по manifest; runtime не зависит от checkout. Существующий credential службы сохраняется, путь берётся из конфигурации/профиля SID службы.
+
+Windows ServiceHost → jobs Worker → ARS HTTP listener сохраняет intent до сети; status остаётся summary-only, waiting означает завершённый ход живого runtime, reply продолжает session. Неопределённый create/ошибка хода при живом runtime сохраняют binding до подтверждённого stop. Глобальной блокировки всех jobs одной task нет; неподдерживаемые capabilities отклоняются.
+
+ARS reply требует idempotency_key: caller генерирует один раз на логический ответ и сохраняет для повторов. Тот же key/текст возвращает сохранённый outcome даже после завершения хода; другой текст с тем же key конфликтует; новый key с тем же текстом запускает новый ход. JSONRPC id не заменяет key. Общая schema оставляет поле optional для legacy backend.
+
+Клиентского UDS нет. SDK/примеры и отдельный deploy gate описаны в соседнем ai-agent-containers/docs/clients-i7.md. Native source Worker не подтверждает установленную Windows service identity. Перед включением ARS необходимо дождаться/остановить active legacy jobs и сохранить history; автоматической миграции/очистки нет. Обновление службы выполняется после review штатным bootstrap из чистой main. Existing token сохраняется; постоянный auth input выбирается на deploy preflight.
