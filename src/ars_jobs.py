@@ -238,7 +238,7 @@ def from_service(config):
         if not cache:
             cache.append(Client(credential_path=selected['credentialPath'],
                 powershell_helper=Path(__file__).with_name('Ars.Client.ps1'), port=selected.get('port',48758),
-                expected_version=selected.get('expectedVersion','0.3.0-dev'), startup=selected.get('startup'),timeout=20))
+                expected_version=selected.get('expectedVersion','0.3.0'), startup=selected.get('startup'),timeout=20))
         return cache[0]
     return ArsJobs(Path(config['protectedRoot'])/'state/ars-jobs.sqlite',selected,client)
 
@@ -247,7 +247,7 @@ def validate_config(config):
     if (not isinstance(config, dict) or set(config) - {'bindings', 'port', 'expectedVersion', 'startup', 'credentialPath'} or
             not isinstance(config.get('bindings'), dict) or not 1 <= len(config['bindings']) <= 128 or
             type(config.get('port', 48758)) is not int or not 1024 <= config.get('port', 48758) <= 65535 or
-            not isinstance(config.get('expectedVersion', '0.3.0-dev'), str)):
+            not isinstance(config.get('expectedVersion', '0.3.0'), str)):
         raise AdapterError('ARS_CONFIG_INVALID')
     allowed = {'schema_version', 'profile_id', 'image_digest', 'lock_sha256', 'mounts', 'state_root', 'auth_file', 'context_files', 'model', 'thread_id'}
     for task, launch in config['bindings'].items():

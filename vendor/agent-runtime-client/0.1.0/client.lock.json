@@ -4,7 +4,7 @@
   "status": "source-candidate",
   "canonical_repository": "ai-agent-containers",
   "files": {
-    "ars_client.py": "0a78de88933848b4e3390a7ac6371da8bdb62625a7b015107f8c2d04d2932bc1",
+    "ars_client.py": "c145fe9ad28c83b3e77183378f64e963de114bda5bc580d8e6500c6e58584ee2",
     "Ars.Client.ps1": "0cb9229ceabe89f82e5109059ac658e8eb020e43f9fbf520d6d72b1245b3a134"
   }
 }
