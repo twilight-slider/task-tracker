@@ -87,7 +87,7 @@ def private_token(path):
 
 class Client:
     def __init__(self, *, token=None, credential_path=None, powershell_helper=None, token_file=None,
-                 host='127.0.0.1', port=48758, timeout=20, startup=None, expected_version='0.3.0-dev'):
+                 host='127.0.0.1', port=48758, timeout=20, startup=None, expected_version='0.3.0'):
         if type(port) is not int or not 1024 <= port <= 65535 or not isinstance(timeout, (int, float)) or not 0 < timeout <= 30:
             raise ArsError('INVALID_CLIENT_CONFIG')
         try:
